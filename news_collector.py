@@ -15,8 +15,6 @@ import techworld_crawler
 import irobotnews_crawler
 import google_news_crawler
 import aitimes_crawler
-import shippingnewsnet_crawler
-import oceanpress_crawler
 
 # oo일전 뉴스부터 수집
 DATE_THRESHOLD = 1
@@ -67,9 +65,7 @@ crawler_tasks = [
     {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
     {"name": "BUSINESSPOST", "func": businesspost_crawler.get_businesspost_data},
     {"name": "GOOGLE_NEWS", "func": google_news_crawler.get_google_news_data},
-    {"name": "AITIMES", "func": aitimes_crawler.get_aitimes_data},
-    {"name": "SHIPPINGNEWSNET", "func": shippingnewsnet_crawler.get_shippingnewsnet_data},
-    {"name": "OCEANPRESS", "func": oceanpress_crawler.get_oceanpress_data}
+    {"name": "AITIMES", "func": aitimes_crawler.get_aitimes_data}
 ]
 
 all_data = []
