@@ -4,6 +4,10 @@ import sys
 import io
 from datetime import datetime
 import concurrent.futures
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # utf-8 for console output robustness
 sys.stdout.reconfigure(encoding='utf-8')
@@ -63,7 +67,7 @@ import businesspost_crawler
 crawler_tasks = [
     {"name": "ZDWANG", "func": zdwang_crawler.get_zdwang_data},
     {"name": "CHEAA", "func": cheaa_crawler.get_cheaa_data},
-    {"name": "SAMSUNG", "func": samsung_crawler.SamsungCrawler().run},
+    {"name": "SAMSUNG", "func": lambda driver, d, m, s: samsung_crawler.SamsungCrawler().run(driver, d, m, s)},
     {"name": "TECHWORLD", "func": techworld_crawler.scrape_techworld_news},
     {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
     {"name": "BUSINESSPOST", "func": businesspost_crawler.get_businesspost_data},
@@ -76,14 +80,28 @@ crawler_tasks = [
 
 all_data = []
 
-# 3. 비동기/멀티스레딩을 통한 자동화 수집
-def execute_crawler(task):
+# 3. 브라우저(드라이버) 초기화 및 순차 수집
+print("🌐 통합 Selenium WebDriver 초기화 중...")
+chrome_options = Options()
+# chrome_options.add_argument('--headless') # 사용자가 사람처럼 보이길 원하므로 headless 제거 또는 유지 (현재는 백그라운드 구동을 위해 headless 유지, 필요시 해제)
+chrome_options.add_argument('--headless')
+chrome_options.add_argument("--window-size=1920,1080")
+chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+shared_driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+shared_driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+shared_driver.set_page_load_timeout(30)
+shared_driver.set_script_timeout(30)
+
+def execute_crawler(task, driver):
     try:
         limit_str = f" (최대 {MAX_ITEMS_PER_CRAWLER}개)" if MAX_ITEMS_PER_CRAWLER else " (제한 없음)"
         print(f"--- {task['name']} 수집 중{limit_str} ---")
         
-        # DATE_THRESHOLD, MAX_ITEMS_PER_CRAWLER, global_seen_links 전달
-        data = task['func'](DATE_THRESHOLD, MAX_ITEMS_PER_CRAWLER, global_seen_links)
+        # 드라이버를 각 크롤러에 전달
+        data = task['func'](driver, DATE_THRESHOLD, MAX_ITEMS_PER_CRAWLER, global_seen_links)
         
         if data:
             print(f"✅ {task['name']}: {len(data)}건 수집 완료")
@@ -95,21 +113,16 @@ def execute_crawler(task):
         print(f"❌ {task['name']} 수집 실패: {e}")
         return []
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(crawler_tasks))
-# 각 크롤러 태스크를 비동기로 실행
-futures = [executor.submit(execute_crawler, task) for task in crawler_tasks]
-
 try:
-    for future in concurrent.futures.as_completed(futures, timeout=180):
+    for task in crawler_tasks:
         try:
-            all_data.extend(future.result())
+            result_data = execute_crawler(task, shared_driver)
+            all_data.extend(result_data)
         except Exception as e:
-            print(f"⚠️ 크롤러 실행 중 스레드 예외 발생: {e}")
-except concurrent.futures.TimeoutError:
-    print("⚠️ 전체 수집 제한시간(3분)을 초과하여 완료되지 않은 크롤러를 강제 중단합니다.")
-
-# 완료되지 않은 스레드가 메인 스레드를 막지 못하도록 바로 종료 옵션 설정
-executor.shutdown(wait=False, cancel_futures=True)
+            print(f"⚠️ 크롤러 실행 중 예외 발생: {e}")
+finally:
+    if shared_driver:
+        shared_driver.quit()
 
 if not all_data:
     print("최종 수집된 데이터가 없습니다.")

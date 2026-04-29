@@ -1,11 +1,12 @@
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 import time
 import re
-import csv
+from datetime import datetime, timedelta
+import sys
+from selenium.webdriver.common.by import By
 
-def get_irobotnews_data(days_to_scrape=1, max_items=None, global_seen_links=None):
+sys.stdout.reconfigure(encoding='utf-8')
+
+def get_irobotnews_data(driver, days_to_scrape=1, max_items=None, global_seen_links=None):
     if max_items is not None and max_items <= 0:
         max_items = None
         
@@ -13,120 +14,132 @@ def get_irobotnews_data(days_to_scrape=1, max_items=None, global_seen_links=None
     results = []
     seen_links = set(global_seen_links) if global_seen_links else set()
     base_url = "https://www.irobotnews.com"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
     
     page = 1
-    keep_going = True
+    keep_going_section = True
     
-    while keep_going:
+    while keep_going_section:
         if max_items is not None and len(results) >= max_items:
             break
             
-        # 목록 페이지 URL 포맷 (예시로 page 파라미터 활용)
         list_url = f"{base_url}/news/articleList.html?page={page}&view_type=sm"
         
         try:
-            resp = requests.get(list_url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            driver.get(list_url)
+            time.sleep(2)
             
-            # id="sample" 인 더미 리스트 제외하고 추출
-            items = soup.select('ul.altlist-webzine > li.altlist-webzine-item:not(#sample)')
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+            time.sleep(1)
             
-            if not items:
-                break
-                
+            items = driver.find_elements(By.CSS_SELECTOR, "ul.altlist-webzine > li.altlist-webzine-item")
+            links_to_fetch = []
+            
             for item in items:
-                if max_items is not None and len(results) >= max_items:
-                    keep_going = False
-                    break
-                    
-                a_tag = item.select_one('h2.altlist-subject a')
-                if not a_tag:
-                    continue
-                    
-                title = a_tag.get_text(strip=True)
-                raw_link = a_tag.get('href', '')
-                
-                # 상대 경로를 절대 경로로 변환
-                link = raw_link if raw_link.startswith('http') else f"{base_url}{raw_link if raw_link.startswith('/') else '/' + raw_link}"
-                
-                if link in seen_links: continue
-                seen_links.add(link)
-                
-                # 상세 페이지 진입
                 try:
-                    det_resp = requests.get(link, headers=headers, timeout=15)
-                    det_resp.raise_for_status()
-                    det_soup = BeautifulSoup(det_resp.text, 'html.parser')
-                    
-                    # 날짜 추출 (예: 입력 2026.03.02 22:03)
-                    info_area = det_soup.select_one('ul.infomation')
-                    info_text = info_area.get_text(separator=" ", strip=True) if info_area else ""
-                    
-                    date_match = re.search(r'(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)', info_text)
-                    
-                    if date_match:
-                        y, m, d, hm = date_match.groups()
-                        if len(hm) == 5:
-                            hm += ":00"
-                        full_date_time = f"{y}-{m}-{d} {hm}" # 19자리 맞춤
-                        date_obj = datetime.strptime(full_date_time, '%Y-%m-%d %H:%M:%S')
-                        
-                        # Cutoff 날짜 필터링
-                        if date_obj.date() < cutoff_date.date():
-                            keep_going = False
-                            break
-                    else:
+                    if item.get_attribute("id") == "sample":
                         continue
                         
-                    # 본문 추출 및 불필요한 태그 제거 (스크립트, 스타일, 이미지 안내 등)
-                    content_area = det_soup.select_one('article#article-view-content-div')
-                    content = ""
-                    if content_area:
-                        for tag in content_area.select('script, style, figure, .photo-layout, .share, [id^="share"]'):
-                            tag.decompose()
-                        content = content_area.get_text('\n', strip=True)
+                    a_tag = item.find_element(By.CSS_SELECTOR, "h2.altlist-subject a")
+                    title = a_tag.text.strip()
+                    raw_link = a_tag.get_attribute("href")
+                    if not raw_link: continue
+                    link = raw_link if raw_link.startswith('http') else f"{base_url}{raw_link if raw_link.startswith('/') else '/' + raw_link}"
+                    
+                    links_to_fetch.append({
+                        "title": title,
+                        "link": link
+                    })
+                except Exception as e:
+                    pass
+                    
+            if not links_to_fetch:
+                break
+                
+            found_in_range = False
+            
+            for item in links_to_fetch:
+                if max_items is not None and len(results) >= max_items:
+                    keep_going_section = False
+                    break
+                    
+                if item["link"] in seen_links: continue
+                seen_links.add(item["link"])
+                
+                content = ""
+                cat_main, cat_sub = "홈", "최신뉴스"
+                full_date_time = ""
+                date_obj = None
+                
+                try:
+                    driver.get(item["link"])
+                    time.sleep(1.5)
+                    
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+                    time.sleep(0.5)
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(0.5)
+                    
+                    try:
+                        info_area = driver.find_element(By.CSS_SELECTOR, "ul.infomation")
+                        info_text = info_area.text.strip()
+                        date_match = re.search(r'(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}:\d{2}(?::\d{2})?)', info_text)
                         
+                        if date_match:
+                            y, m, d, hm = date_match.groups()
+                            if len(hm) == 5: hm += ":00"
+                            full_date_time = f"{y}-{m}-{d} {hm}"
+                            date_obj = datetime.strptime(full_date_time, '%Y-%m-%d %H:%M:%S')
+                    except: pass
+                    
+                    if not date_obj:
+                        continue
                         
-                    # 카테고리 추출 (예: 제목 < 서브 < 메인 < 웹사이트명)
-                    cat_main, cat_sub = "홈", "최신뉴스"
-                    title_tag_full = det_soup.find('title')
-                    if title_tag_full:
-                        parts = [p.strip() for p in title_tag_full.text.split('<')]
+                    if date_obj.date() < cutoff_date.date():
+                        continue
+                        
+                    found_in_range = True
+                    
+                    try:
+                        title_text = driver.title
+                        parts = [p.strip() for p in title_text.split('<')]
                         if len(parts) >= 3:
                             cat_sub = parts[1]
                             cat_main = parts[2]
-                            
-                    content_summary = content[:200]
+                    except: pass
                     
-                    print(f"수집 완료: {full_date_time} | {title[:30]}...")
+                    try:
+                        content_area = driver.find_element(By.CSS_SELECTOR, "article#article-view-content-div")
+                        content = content_area.text.strip()
+                    except: pass
+                except Exception as det_e:
+                    print(f"상세 페이지 오류 ({item['link']}): {det_e}")
                     
-                    results.append({
-                        'title': title,
-                        'content': content,
-                        'content_summary': content_summary,
-                        'enveloped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        'date': str(full_date_time),
-                        'provider': '로봇신문',
-                        'category_main': cat_main,
-                        'category_sub': cat_sub,
-                        'provider_link_page': link,
-                        'useful': 1,
-                        'strategy_agenda': 1,
-                        'YEAR': date_obj.year,
-                        'MONTH': date_obj.month,
-                        'WEEK': date_obj.isocalendar()[1]
-                    })
-                    
-                    time.sleep(1) # 서버 부하 방지
-                    
-                except Exception as e:
-                    print(f"상세 페이지 오류 ({link}): {e}")
+                if not date_obj or date_obj.date() < cutoff_date.date():
                     continue
                     
+                content_summary = content[:200].replace('\n', ' ') if content else ""
+                print(f"수집 완료: {full_date_time} | {item['title'][:30]}...")
+                
+                results.append({
+                    'title': item['title'],
+                    'content': content,
+                    'content_summary': content_summary,
+                    'enveloped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'date': str(full_date_time),
+                    'provider': '로봇신문',
+                    'category_main': cat_main,
+                    'category_sub': cat_sub,
+                    'provider_link_page': item['link'],
+                    'useful': 1,
+                    'strategy_agenda': 1,
+                    'YEAR': date_obj.year,
+                    'MONTH': date_obj.month,
+                    'WEEK': date_obj.isocalendar()[1]
+                })
+                time.sleep(1)
+                
+            if not found_in_range:
+                keep_going_section = False
             page += 1
             
         except Exception as e:
@@ -137,26 +150,43 @@ def get_irobotnews_data(days_to_scrape=1, max_items=None, global_seen_links=None
 
 if __name__ == "__main__":
     import argparse
+    import csv
+    import os
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from webdriver_manager.chrome import ChromeDriverManager
+    
     parser = argparse.ArgumentParser(description="Run iRobotNews crawler independently.")
     parser.add_argument("--days", type=int, default=1, help="Number of days to scrape (DATE_THRESHOLD)")
     args = parser.parse_args()
 
     print(f"로봇신문 크롤링을 시작합니다. (과거 {args.days}일)")
-    scraped_data = get_irobotnews_data(days_to_scrape=args.days)
     
-    if scraped_data:
-        import os
-        import csv
-        os.makedirs("output", exist_ok=True)
-        today_str = datetime.now().strftime('%Y%m%d')
-        file_name = f"output/{today_str}_irobotnews.csv"
-        keys = scraped_data[0].keys()
-        
-        with open(file_name, 'w', encoding='utf-8-sig', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(scraped_data)
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    
+    try:
+        scraped_data = get_irobotnews_data(driver, days_to_scrape=args.days)
+        if scraped_data:
+            os.makedirs("output", exist_ok=True)
+            today_str = datetime.now().strftime('%Y%m%d')
+            file_name = f"output/{today_str}_irobotnews.csv"
+            keys = scraped_data[0].keys()
             
-        print(f"\n✅ 수집 완료: 총 {len(scraped_data)}건의 기사가 '{file_name}'로 저장되었습니다.")
-    else:
-        print("\n[안내] 수집된 데이터가 없습니다.")
+            with open(file_name, 'w', encoding='utf-8-sig', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=keys)
+                writer.writeheader()
+                writer.writerows(scraped_data)
+                
+            print(f"\n✅ 수집 완료: 총 {len(scraped_data)}건의 기사가 '{file_name}'로 저장되었습니다.")
+        else:
+            print("\n[안내] 수집된 데이터가 없습니다.")
+    finally:
+        driver.quit()
