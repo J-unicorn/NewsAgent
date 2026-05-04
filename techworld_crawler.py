@@ -12,6 +12,19 @@ from crawler_common import (
 BASE_URL = 'https://www.epnc.co.kr'
 
 
+def get_all_text(element):
+    """Selector 하위의 모든 텍스트를 공백 정리해서 반환"""
+    if element is None:
+        return ''
+    try:
+        text_handler = element.css('::text')
+        if hasattr(text_handler, 'getall'):
+            return clean_text(' '.join(text_handler.getall()))
+    except Exception:
+        pass
+    return clean_text(get_text(element))
+
+
 def extract_category_from_title(title):
     """제목에서 [카테고리] 또는 <카테고리> 추출"""
     if not title:
@@ -32,7 +45,7 @@ def fetch_techworld_detail(article_url):
         page = Fetcher.get(article_url, stealthy_headers=True, timeout=10)
         
         content_elem = first_element(page, '#article-view-content-div')
-        content = clean_text(get_text(content_elem))
+        content = get_all_text(content_elem)
         
         return {
             'content': content,
@@ -60,8 +73,8 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         print(f"[TECHWORLD] 목록 실패: {e}")
         return []
     
-    items = page.css('li')
-    print(f"[TECHWORLD] {len(items)}개 li 발견 (필터링 중)")
+    items = page.css('li.altlist-text-item')
+    print(f"[TECHWORLD] {len(items)}개 항목 발견")
     
     articles_to_fetch = []
     
@@ -69,8 +82,7 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         if len(articles_to_fetch) >= max_items:
             break
         
-        # 0.4+: first_element 헬퍼
-        a_tag = first_element(item, 'h2.titles a')
+        a_tag = first_element(item, 'a[href*="articleView"]')
         if not a_tag:
             continue
         
@@ -87,9 +99,11 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         
         category, title = extract_category_from_title(title_text)
         
-        # 날짜
-        date_elem = first_element(item, 'em.info.dated')
-        date_str = get_text(date_elem)
+        info_items = [get_all_text(elem) for elem in item.css('.altlist-info-item')]
+        if info_items and not category:
+            category = info_items[0]
+        reporter = info_items[1] if len(info_items) > 1 else ''
+        date_str = info_items[2] if len(info_items) > 2 else ''
         article_date = parse_date_flexible(date_str)
         
         if article_date and article_date < threshold_date:
@@ -101,6 +115,7 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
             'provider': '테크월드뉴스',
             'provider_link_page': url,
             'category_main': category,
+            'reporter': reporter,
             'date': article_date.strftime('%Y-%m-%d %H:%M:%S') if article_date else '',
             'enveloped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         })
