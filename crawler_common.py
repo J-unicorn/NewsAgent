@@ -36,6 +36,7 @@ class RssConfig:
     category_path: str = "category"
     content_path: str = ""
     namespaces: dict[str, str] = field(default_factory=dict)
+    timeout: int = 15
 
 
 SelectorSpec = str | tuple[str, str | None]
@@ -57,6 +58,7 @@ class SelectorConfig:
     category_main_default: str = ""
     category_sub_default: str = ""
     reporter_default: str = ""
+    timeout: int = 15
 
 
 @dataclass
@@ -67,6 +69,7 @@ class DetailConfig:
     date_selectors: list[str | tuple[str, str | None]] = field(default_factory=list)
     summary_selectors: list[str | tuple[str, str | None]] = field(default_factory=list)
     max_content_length: int = 2000
+    timeout: int = 15
 
 
 def first_element(parent, selector):
@@ -293,7 +296,7 @@ def _base_article(title, url, provider, date_obj=None, category_main="", categor
 
 def parse_rss_articles(config: RssConfig, days=1, max_items=100, seen_links=None, site_name=""):
     seen_links = seen_links or set()
-    page = fetch_page(config.url, timeout=15, site_name=site_name)
+    page = fetch_page(config.url, timeout=config.timeout, site_name=site_name)
     if not page:
         return []
     try:
@@ -348,7 +351,7 @@ def parse_selector_articles(config: SelectorConfig, days=1, max_items=100, seen_
     articles = []
     for page_no in range(1, max(config.max_pages, 1) + 1):
         list_url = config.list_url_builder(page_no) if config.list_url_builder else config.list_url
-        page = fetch_page(list_url, timeout=15, site_name=site_name)
+        page = fetch_page(list_url, timeout=config.timeout, site_name=site_name)
         if not page:
             break
 
@@ -423,7 +426,7 @@ def extract_by_specs(page, specs: Iterable[SelectorSpec], max_length=2000):
 def fetch_detail(article, detail_config: DetailConfig | None, site_name=""):
     if not detail_config:
         return {}
-    page = fetch_page(article["url"], timeout=15, site_name=site_name)
+    page = fetch_page(article["url"], timeout=detail_config.timeout, site_name=site_name)
     if not page:
         return {}
 
