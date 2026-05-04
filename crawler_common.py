@@ -1,55 +1,48 @@
 """
-공통 크롤러 헬퍼 - Scrapling 0.4.x 호환
+Scrapling 0.4+ 정확한 API 사용
 
-주요 변경:
-- css_first → css(selector)[0] 또는 first() 헬퍼 함수
-- StealthyFetcher 지원 추가
+공식 문서 기반:
+- Selector.css() / .css_first() / .xpath() / .xpath_first()
+- Selectors (List) 는 .css() 만 가능 (css_first 없음)
+- adaptive=True로 자동 적응
+- StealthyFetcher.adaptive = True 설정 가능
 """
 
-from scrapling.fetchers import Fetcher, StealthyFetcher
+from scrapling.fetchers import Fetcher, StealthyFetcher, DynamicFetcher
 from datetime import datetime, timedelta
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def css_first(element, selector):
-    """
-    CSS 셀렉터로 첫 번째 요소 가져오기 (안전)
-    Selector 또는 Selectors 객체 모두 지원
-    """
-    try:
-        results = element.css(selector)
-        if results and len(results) > 0:
-            return results[0]
-        return None
-    except Exception:
-        return None
+# ============================================================
+# StealthyFetcher 글로벌 설정 (공식 권장)
+# adaptive=True: 사이트 구조 변경에 자동 적응
+# ============================================================
+StealthyFetcher.adaptive = True
 
 
-def get_text(element, default=''):
-    """요소에서 텍스트 추출 (안전)"""
+def safe_text(element, default=''):
+    """Selector에서 텍스트 추출 (안전)"""
     if element is None:
         return default
     try:
-        if hasattr(element, 'text'):
-            text = element.text
-            if hasattr(text, 'strip'):
-                return text.strip()
-            return str(text).strip() if text else default
-        return default
-    except Exception:
+        # Scrapling의 Selector는 .text 속성 (TextHandler 반환)
+        text = element.text
+        return str(text).strip() if text else default
+    except (AttributeError, TypeError):
         return default
 
 
-def get_attr(element, attr_name, default=''):
-    """요소에서 속성값 추출 (안전)"""
+def safe_attr(element, attr_name, default=''):
+    """Selector에서 속성값 추출 (안전)"""
     if element is None:
         return default
     try:
+        # Scrapling의 attrib은 AttributesHandler (dict-like)
         if hasattr(element, 'attrib'):
-            return element.attrib.get(attr_name, default)
+            return str(element.attrib.get(attr_name, default))
         return default
-    except Exception:
+    except (AttributeError, TypeError):
         return default
 
 
@@ -84,35 +77,32 @@ def parse_date_flexible(date_str, current_year=None):
     return None
 
 
-def safe_fetch(url, timeout=10, max_retries=2, use_stealth=False):
-    """
-    재시도 로직이 있는 안전한 fetch
-    use_stealth=True면 StealthyFetcher (느림, Cloudflare 우회)
-    """
-    last_error = None
-    fetcher = StealthyFetcher if use_stealth else Fetcher
-    
-    for attempt in range(max_retries):
-        try:
-            if use_stealth:
-                # StealthyFetcher는 다른 옵션
-                return fetcher.fetch(url, headless=True, network_idle=True)
-            else:
-                return fetcher.get(url, stealthy_headers=True, timeout=timeout)
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                continue
-    raise last_error
+def clean_text(text, max_length=2000):
+    """텍스트 정리"""
+    if not text:
+        return ''
+    text = re.sub(r'\s+', ' ', str(text)).strip()
+    if len(text) > max_length:
+        text = text[:max_length] + '...'
+    return text
+
+
+def normalize_url(raw_link, base_url):
+    """상대 URL → 절대 URL"""
+    if not raw_link:
+        return ''
+    raw_link = str(raw_link)
+    if raw_link.startswith('http'):
+        return raw_link
+    return base_url.rstrip('/') + '/' + raw_link.lstrip('/')
 
 
 def parallel_fetch_details(article_list, detail_parser, max_workers=10, site_name=''):
-    """기사 본문 병렬 수집"""
+    """병렬 본문 수집"""
     if not article_list:
         return []
     
     results = []
-    
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_article = {
             executor.submit(detail_parser, art['url']): art
@@ -133,23 +123,3 @@ def parallel_fetch_details(article_list, detail_parser, max_workers=10, site_nam
                 results.append({**art, 'content': ''})
     
     return results
-
-
-def clean_text(text, max_length=2000):
-    """텍스트 정리"""
-    if not text:
-        return ''
-    text = re.sub(r'\s+', ' ', str(text)).strip()
-    if len(text) > max_length:
-        text = text[:max_length] + '...'
-    return text
-
-
-def normalize_url(raw_link, base_url):
-    """상대 URL을 절대 URL로"""
-    if not raw_link:
-        return ''
-    raw_link = str(raw_link)
-    if raw_link.startswith('http'):
-        return raw_link
-    return base_url.rstrip('/') + '/' + raw_link.lstrip('/')

@@ -1,16 +1,17 @@
 """
-BUSINESSPOST Scrapling 크롤러 (수정 v2)
+BUSINESSPOST Scrapling 크롤러 (정확한 공식 API)
 
-403 차단 문제로 StealthyFetcher 사용
-- StealthyFetcher = Playwright 기반 (Chrome 띄움, 약간 느림)
-- 그래도 Selenium보다는 빠름
+StealthyFetcher를 정확하게 사용:
+- StealthyFetcher.adaptive = True (글로벌 설정)
+- StealthyFetcher.fetch(url, headless=True, network_idle=True)
+- 봇 차단(403) 우회 가능
 """
 
-from scrapling.fetchers import Fetcher, StealthyFetcher
+from scrapling.fetchers import StealthyFetcher
 from datetime import datetime, timedelta
 from crawler_common import (
-    parallel_fetch_details, clean_text, normalize_url,
-    css_first, get_text, get_attr
+    safe_text, safe_attr, clean_text, normalize_url,
+    parallel_fetch_details
 )
 
 
@@ -18,10 +19,15 @@ BASE_URL = 'https://www.businesspost.co.kr'
 
 
 def fetch_businesspost_page(url):
-    """StealthyFetcher로 페이지 가져오기 (403 우회)"""
+    """StealthyFetcher로 페이지 가져오기 (Cloudflare/봇 차단 우회)"""
     try:
-        # StealthyFetcher: Cloudflare/봇 차단 우회
-        page = StealthyFetcher.fetch(url, headless=True, network_idle=True, timeout=20000)
+        # 공식 권장 방식
+        page = StealthyFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=True,
+            # solve_cloudflare=True,  # Cloudflare Turnstile 자동 해결
+        )
         return page
     except Exception as e:
         print(f"  ❌ BUSINESSPOST fetch 실패 ({url[:60]}): {e}")
@@ -35,19 +41,16 @@ def fetch_businesspost_detail(article_url):
         if not page:
             return {'content': '', 'category_main': '', 'category_sub': '', 'reporter': ''}
         
-        # 본문
-        content_elem = css_first(page, 'div.detail_editor')
-        content = clean_text(get_text(content_elem))
+        content_elem = page.css_first('div.detail_editor')
+        content = clean_text(safe_text(content_elem))
         
-        # 카테고리
-        category_elem = css_first(page, 'span.category')
-        category = get_text(category_elem)
+        category_elem = page.css_first('span.category')
+        category = safe_text(category_elem)
         
-        # 작성자
-        author_elem = css_first(page, 'div.author_info')
+        author_elem = page.css_first('div.author_info')
         reporter = ''
         if author_elem:
-            author_text = get_text(author_elem)
+            author_text = safe_text(author_elem)
             reporter = author_text.split()[0] if author_text else ''
         
         return {
@@ -72,7 +75,7 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
     
     page = fetch_businesspost_page(list_url)
     if not page:
-        print(f"[BUSINESSPOST] 목록 실패")
+        print("[BUSINESSPOST] 목록 실패")
         return []
     
     items = page.css('div.left_post')
@@ -83,14 +86,15 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
         if len(articles_to_fetch) >= max_items:
             break
         
-        a_tag = css_first(item, 'a')
+        # 자식: Selector에서 css_first 사용
+        a_tag = item.css_first('a')
         if not a_tag:
             continue
         
-        title_elem = css_first(item, 'h3')
-        title = get_text(title_elem)
+        title_elem = item.css_first('h3')
+        title = safe_text(title_elem)
         
-        raw_link = get_attr(a_tag, 'href')
+        raw_link = safe_attr(a_tag, 'href')
         if not title or not raw_link:
             continue
         
@@ -113,7 +117,7 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
     if not articles_to_fetch:
         return []
     
-    # ⚠️ StealthyFetcher는 무거우므로 동시성 낮게 (5)
+    # StealthyFetcher는 무거우므로 동시성 5
     results = parallel_fetch_details(
         articles_to_fetch,
         fetch_businesspost_detail,
@@ -131,3 +135,5 @@ if __name__ == '__main__':
     data = get_businesspost_data(days=1, max_items=10)
     elapsed = time.time() - start
     print(f"\n✅ {len(data)}개 기사, {elapsed:.1f}초")
+    if data:
+        print(f"\n샘플: {data[0]['title']}")

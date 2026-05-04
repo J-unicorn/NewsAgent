@@ -1,17 +1,20 @@
 """
-AITIMES Scrapling 크롤러 (수정 v2)
+AITIMES Scrapling 크롤러 (정확한 공식 API)
 
-주요 수정:
-- css_first → css_first 헬퍼 함수로 통일
-- 자식 요소 선택 시 css(selector)[0] 패턴 사용
-- 안전한 텍스트/속성 추출
+공식 API 사용 패턴:
+- page.css('selector')              → Selectors (List of Selector)
+- page.css_first('selector')        → 첫 번째 Selector (10% 빠름)
+- selector.css('selector')          → 자식 Selectors (Selector에서 호출 시 작동!)
+- selector.css_first('selector')    → 자식 첫 번째 (Selector에서 작동!)
+- selector.text                     → TextHandler (str-like)
+- selector.attrib['key']            → 속성값
 """
 
 from scrapling.fetchers import Fetcher
 from datetime import datetime, timedelta
 from crawler_common import (
-    safe_fetch, parallel_fetch_details, clean_text, normalize_url,
-    css_first, get_text, get_attr
+    safe_text, safe_attr, clean_text, normalize_url,
+    parallel_fetch_details
 )
 
 
@@ -21,19 +24,18 @@ BASE_URL = 'https://www.aitimes.com'
 def fetch_aitimes_detail(article_url):
     """단일 기사 본문"""
     try:
-        page = safe_fetch(article_url, timeout=10)
+        # adaptive=True: 사이트 변경에 자동 적응
+        page = Fetcher.get(article_url, stealthy_headers=True, timeout=10)
         
-        # 본문
-        content_elem = css_first(page, '#article-view-content-div')
-        content = clean_text(get_text(content_elem))
+        # css_first는 Selector 반환 (없으면 None 반환)
+        content_elem = page.css_first('#article-view-content-div')
+        content = clean_text(safe_text(content_elem))
         
-        # 카테고리
-        category_elem = css_first(page, '.article-head-category') or css_first(page, '.breadcrumb a')
-        category = get_text(category_elem)
+        category_elem = page.css_first('.article-head-category') or page.css_first('.breadcrumb a')
+        category = safe_text(category_elem)
         
-        # 기자
-        reporter_elem = css_first(page, '.byline em.name') or css_first(page, '.user-info .name')
-        reporter = get_text(reporter_elem)
+        reporter_elem = page.css_first('.byline em.name') or page.css_first('.user-info .name')
+        reporter = safe_text(reporter_elem)
         
         return {
             'content': content,
@@ -47,7 +49,7 @@ def fetch_aitimes_detail(article_url):
 
 
 def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
-    """AITIMES 크롤러 (Scrapling)"""
+    """AITIMES 크롤러 - 정확한 Scrapling API"""
     seen_links = seen_links or set()
     threshold_date = datetime.now() - timedelta(days=days)
     
@@ -56,27 +58,34 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
     list_url = f'{BASE_URL}/news/articleList.html'
     
     try:
-        page = safe_fetch(list_url, timeout=10)
+        page = Fetcher.get(list_url, stealthy_headers=True, timeout=10)
     except Exception as e:
         print(f"[AITIMES] 목록 페이지 실패: {e}")
         return []
     
-    # 메인 페이지 객체 → page.css() 가능
+    # ✅ page.css() → Selectors (List of Selector)
     items = page.css('li.altlist-text-item')
     print(f"[AITIMES] {len(items)}개 항목 발견")
     
     articles_to_fetch = []
+    
+    # ✅ items는 Selectors지만 iter하면 각 element는 Selector
+    # ✅ Selector는 css_first() 사용 가능!
     for item in items:
         if len(articles_to_fetch) >= max_items:
             break
         
-        # 자식 요소 선택 시 css_first 헬퍼 사용
-        a_tag = css_first(item, 'a')
+        # ✅ 자식 element에서 css_first() 사용
+        a_tag = item.css_first('a')
         if not a_tag:
             continue
         
-        title = get_text(a_tag)
-        raw_link = get_attr(a_tag, 'href')
+        # ✅ Selector.text → TextHandler (str)
+        title = safe_text(a_tag)
+        
+        # ✅ Selector.attrib → AttributesHandler (dict-like)
+        raw_link = safe_attr(a_tag, 'href')
+        
         if not title or not raw_link:
             continue
         
@@ -117,9 +126,7 @@ if __name__ == '__main__':
     elapsed = time.time() - start
     print(f"\n✅ {len(data)}개 기사, {elapsed:.1f}초")
     if data:
-        print(f"평균: {elapsed/len(data):.2f}초/기사")
-        # 샘플 출력
-        print(f"\n샘플 (첫 번째 기사):")
-        print(f"제목: {data[0]['title']}")
-        print(f"URL: {data[0]['url']}")
-        print(f"본문 길이: {len(data[0]['content'])}")
+        print(f"\n샘플:")
+        print(f"  제목: {data[0]['title']}")
+        print(f"  본문 길이: {len(data[0]['content'])}")
+        print(f"  URL: {data[0]['url']}")
