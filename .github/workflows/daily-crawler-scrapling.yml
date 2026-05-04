@@ -1,4 +1,4 @@
-name: Daily News Crawler (Scrapling Final)
+name: Daily News Crawler (Scrapling 0.4.2+)
 
 on:
   push:
@@ -34,37 +34,84 @@ jobs:
         with:
           ref: test_scrapling
       
+      # 🆕 캐시 없이 Python 설치
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
+          # cache 옵션 제거! (이전 0.2.x 캐시 사용 방지)
       
-      # 🆕 최신 Scrapling 강제 설치
-      - name: Install Scrapling (latest)
+      # 🆕 Scrapling 0.4.2+ 강제 설치
+      - name: Install Scrapling 0.4.2+ (forced upgrade)
         run: |
           python -m pip install --upgrade pip
-          # 최신 버전 설치 (>=0.4)
-          pip install --upgrade "scrapling[fetchers]"
-          pip install pandas
           
-          # 버전 확인
-          python -c "import scrapling; print(f'Scrapling version: {scrapling.__version__}')"
+          # 기존 scrapling 완전 제거
+          pip uninstall -y scrapling || true
+          
+          # 캐시 무시 + 버전 명시 + 강제 업그레이드
+          pip install --no-cache-dir --upgrade "scrapling[fetchers]>=0.4.2"
+          pip install --no-cache-dir pandas
+          
+          echo ""
+          echo "=== 설치된 패키지 ==="
+          pip list | grep -iE "scrapling|playwright|lxml|cssselect"
       
-      # 🆕 BUSINESSPOST는 StealthyFetcher 필요 → Playwright 브라우저 설치
-      - name: Install Scrapling browsers (StealthyFetcher)
+      # 🆕 Scrapling 버전 검증 (0.4+ 필수)
+      - name: Verify Scrapling version
+        run: |
+          python << 'PYEOF'
+          import sys
+          try:
+              import scrapling
+              v = scrapling.__version__
+              print(f"📌 Scrapling 버전: {v}")
+              
+              # 버전 파싱
+              parts = v.split('.')
+              major = int(parts[0])
+              minor = int(parts[1]) if len(parts) > 1 else 0
+              
+              if major == 0 and minor < 4:
+                  print(f"❌ ERROR: Scrapling {v}는 너무 낮음. 0.4+ 필요")
+                  print("   pip uninstall scrapling && pip install --no-cache-dir 'scrapling[fetchers]>=0.4.2'")
+                  sys.exit(1)
+              
+              print(f"✅ Scrapling {v} OK")
+              
+              # API 검증: css_first 확인
+              from scrapling.parser import Selector
+              dummy = Selector('<html><body><a href="x">y</a></body></html>')
+              
+              if not hasattr(dummy, 'css_first'):
+                  print("❌ ERROR: css_first 메서드 없음")
+                  sys.exit(1)
+              
+              # 자식 요소에서도 확인
+              elements = dummy.css('a')
+              if elements and len(elements) > 0:
+                  first = elements[0]
+                  if not hasattr(first, 'css_first'):
+                      print(f"❌ ERROR: 자식 요소(type={type(first).__name__})에 css_first 없음")
+                      sys.exit(1)
+                  print(f"✅ 자식 요소(type={type(first).__name__})에서 css_first 사용 가능")
+              
+              print("✅ 모든 API 검증 통과")
+              
+          except ImportError as e:
+              print(f"❌ Scrapling import 실패: {e}")
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ 검증 실패: {e}")
+              sys.exit(1)
+          PYEOF
+      
+      # 🆕 BUSINESSPOST는 브라우저 필요
+      - name: Install Scrapling browsers
         if: matrix.site == 'BUSINESSPOST'
         run: |
-          # Scrapling 공식: 브라우저 자동 설치
-          scrapling install
-          
-          # 백업: 직접 설치
-          # python -m playwright install chromium --with-deps
-      
-      - name: Show environment
-        run: |
-          python --version
-          pip list | grep -iE "scrapling|playwright|lxml|cssselect"
+          # 0.4.2부터는 'scrapling install' 명령
+          scrapling install || python -m playwright install chromium --with-deps
       
       - name: Create output directory
         run: mkdir -p output
@@ -124,7 +171,6 @@ jobs:
           python << 'PYEOF'
           import pandas as pd
           import glob
-          import os
           import re
           from datetime import datetime
           
@@ -133,7 +179,6 @@ jobs:
           print(f"Found {len(all_csvs)} CSV files")
           
           if not all_csvs:
-              print("⚠️ No CSV files")
               exit(0)
           
           dfs = []
@@ -155,12 +200,11 @@ jobs:
               def normalize_title(t):
                   if pd.isna(t): return ""
                   return re.sub(r'\s+', '', str(t)).lower()
-              
               merged['_norm'] = merged['title'].apply(normalize_title)
               before = len(merged)
               merged = merged.drop_duplicates(subset=['_norm'], keep='first')
               merged = merged.drop(columns=['_norm'])
-              print(f"🧹 중복: {before} → {len(merged)}")
+              print(f"중복: {before} → {len(merged)}")
           
           if 'date' in merged.columns:
               merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
@@ -168,7 +212,7 @@ jobs:
           today = datetime.now().strftime('%y%m%d_%H%M%S')
           output = f'merged/{today}_competitor.csv'
           merged.to_csv(output, index=False, encoding='utf-8-sig')
-          print(f"\n✅ {output}: {len(merged)} rows")
+          print(f"✅ {output}: {len(merged)} rows")
           
           if 'provider' in merged.columns:
               print(merged['provider'].value_counts())
