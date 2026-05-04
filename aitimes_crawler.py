@@ -1,37 +1,39 @@
 """
-AITIMES Scrapling 크롤러
-정적 HTML → Fetcher만 사용
+AITIMES Scrapling 크롤러 (수정 v2)
 
-기존 셀렉터:
-- 목록: li.altlist-text-item
-- 링크: a (각 li 내부)
-- 본문: #article-view-content-div
+주요 수정:
+- css_first → css_first 헬퍼 함수로 통일
+- 자식 요소 선택 시 css(selector)[0] 패턴 사용
+- 안전한 텍스트/속성 추출
 """
 
 from scrapling.fetchers import Fetcher
 from datetime import datetime, timedelta
-from crawler_common import parse_date_flexible, safe_fetch, parallel_fetch_details, clean_text, normalize_url
+from crawler_common import (
+    safe_fetch, parallel_fetch_details, clean_text, normalize_url,
+    css_first, get_text, get_attr
+)
 
 
 BASE_URL = 'https://www.aitimes.com'
 
 
 def fetch_aitimes_detail(article_url):
-    """단일 기사 본문 가져오기"""
+    """단일 기사 본문"""
     try:
         page = safe_fetch(article_url, timeout=10)
         
-        # 본문 (셀렉터: #article-view-content-div)
-        content_elem = page.css_first('#article-view-content-div')
-        content = clean_text(content_elem.text) if content_elem else ''
+        # 본문
+        content_elem = css_first(page, '#article-view-content-div')
+        content = clean_text(get_text(content_elem))
         
         # 카테고리
-        category_elem = page.css_first('.article-head-category') or page.css_first('.breadcrumb a')
-        category = category_elem.text.strip() if category_elem else ''
+        category_elem = css_first(page, '.article-head-category') or css_first(page, '.breadcrumb a')
+        category = get_text(category_elem)
         
         # 기자
-        reporter_elem = page.css_first('.byline em.name') or page.css_first('.user-info .name')
-        reporter = reporter_elem.text.strip() if reporter_elem else ''
+        reporter_elem = css_first(page, '.byline em.name') or css_first(page, '.user-info .name')
+        reporter = get_text(reporter_elem)
         
         return {
             'content': content,
@@ -45,10 +47,7 @@ def fetch_aitimes_detail(article_url):
 
 
 def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
-    """
-    AITIMES 크롤러 (Scrapling)
-    driver 파라미터는 인터페이스 호환용 (사용 안 함)
-    """
+    """AITIMES 크롤러 (Scrapling)"""
     seen_links = seen_links or set()
     threshold_date = datetime.now() - timedelta(days=days)
     
@@ -62,7 +61,7 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
         print(f"[AITIMES] 목록 페이지 실패: {e}")
         return []
     
-    # 기사 목록 (셀렉터: li.altlist-text-item)
+    # 메인 페이지 객체 → page.css() 가능
     items = page.css('li.altlist-text-item')
     print(f"[AITIMES] {len(items)}개 항목 발견")
     
@@ -71,19 +70,18 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
         if len(articles_to_fetch) >= max_items:
             break
         
-        # 링크
-        a_tag = item.css_first('a')
+        # 자식 요소 선택 시 css_first 헬퍼 사용
+        a_tag = css_first(item, 'a')
         if not a_tag:
             continue
         
-        title = a_tag.text.strip() if a_tag.text else ''
-        raw_link = a_tag.attrib.get('href', '')
+        title = get_text(a_tag)
+        raw_link = get_attr(a_tag, 'href')
         if not title or not raw_link:
             continue
         
         url = normalize_url(raw_link, BASE_URL)
         
-        # 중복 체크
         if url in seen_links:
             continue
         
@@ -93,7 +91,7 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
             'provider': 'AI타임스',
             'provider_link_page': url,
             'enveloped_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'date': '',  # 본문에서 추출 가능하면 보충
+            'date': '',
         })
     
     print(f"[AITIMES] 본문 수집 대상: {len(articles_to_fetch)}개")
@@ -101,7 +99,6 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
     if not articles_to_fetch:
         return []
     
-    # 본문 병렬 수집 (10개 동시)
     results = parallel_fetch_details(
         articles_to_fetch,
         fetch_aitimes_detail,
@@ -113,7 +110,6 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
     return results
 
 
-# 단독 실행 시 테스트용
 if __name__ == '__main__':
     import time
     start = time.time()
@@ -122,3 +118,8 @@ if __name__ == '__main__':
     print(f"\n✅ {len(data)}개 기사, {elapsed:.1f}초")
     if data:
         print(f"평균: {elapsed/len(data):.2f}초/기사")
+        # 샘플 출력
+        print(f"\n샘플 (첫 번째 기사):")
+        print(f"제목: {data[0]['title']}")
+        print(f"URL: {data[0]['url']}")
+        print(f"본문 길이: {len(data[0]['content'])}")

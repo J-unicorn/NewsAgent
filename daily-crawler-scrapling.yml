@@ -1,9 +1,13 @@
-name: Daily News Crawler (Scrapling)
+name: Daily News Crawler (Scrapling v2)
 
 on:
   push:
     branches:
       - test_scrapling
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
 
 env:
@@ -12,12 +16,9 @@ env:
   PYTHONIOENCODING: utf-8
 
 jobs:
-  # ========================================
-  # Job 1: 사이트별 병렬 크롤링 (Phase 1: 3개)
-  # ========================================
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # Scrapling은 빨라서 15분이면 충분
+    timeout-minutes: 15
     
     strategy:
       fail-fast: false
@@ -45,14 +46,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas
           pip install "scrapling[fetchers]"
-          # Scrapling 브라우저 의존성 설치 (StealthyFetcher용)
-          # Phase 1에서는 정적 HTML만 사용하므로 일단 생략 가능
-          # scrapling install
       
-      - name: Show environment info
+      # 🆕 StealthyFetcher용 브라우저 설치 (BUSINESSPOST에 필요)
+      # AITIMES, TECHWORLD는 일반 Fetcher라 필요 없지만 통일성을 위해 설치
+      - name: Install Scrapling browsers (only for BUSINESSPOST)
+        if: matrix.site == 'BUSINESSPOST'
+        run: |
+          scrapling install
+      
+      - name: Show environment
         run: |
           python --version
-          pip show scrapling | head -5
+          pip show scrapling | grep -E "Name|Version"
       
       - name: Create output directory
         run: mkdir -p output
@@ -63,8 +68,6 @@ jobs:
           time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
         env:
           SITE: ${{ matrix.site }}
-          PYTHONIOENCODING: utf-8
-          PYTHONUNBUFFERED: 1
         continue-on-error: true
       
       - name: Show output
@@ -72,13 +75,13 @@ jobs:
         run: |
           echo "=== Output for ${{ matrix.site }} ==="
           ls -lah output/ || echo "No output"
-          echo ""
           if [ -f output/${{ matrix.site }}_run.log ]; then
-            echo "=== Last 30 lines of log ==="
+            echo ""
+            echo "=== Last 30 lines ==="
             tail -30 output/${{ matrix.site }}_run.log
           fi
       
-      - name: Upload artifact for ${{ matrix.site }}
+      - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -87,9 +90,6 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # ========================================
-  # Job 2: 결과 병합
-  # ========================================
   merge:
     needs: crawl
     runs-on: ubuntu-latest
@@ -97,29 +97,22 @@ jobs:
     timeout-minutes: 5
     
     steps:
-      - name: Checkout test_scrapling
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: test_scrapling
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
       - name: Install pandas
         run: pip install pandas
       
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./all-results
           pattern: scrapling-*-${{ github.run_id }}
-      
-      - name: Show downloaded files
-        run: |
-          echo "=== Downloaded ==="
-          find all-results -type f | head -30
       
       - name: Merge CSVs
         run: |
@@ -132,7 +125,6 @@ jobs:
           from datetime import datetime
           
           all_csvs = glob.glob('all-results/**/*.csv', recursive=True)
-          # _empty.csv는 제외
           all_csvs = [c for c in all_csvs if not c.endswith('_empty.csv')]
           
           print(f"Found {len(all_csvs)} CSV files")
@@ -152,23 +144,21 @@ jobs:
                   print(f"  ✗ {csv}: {e}")
           
           if not dfs:
-              print("❌ 병합할 데이터 없음")
+              print("❌ 데이터 없음")
               exit(0)
           
           merged = pd.concat(dfs, ignore_index=True)
-          print(f"\n📊 병합 전: {len(merged)} rows")
           
-          # 중복 제거
           if 'title' in merged.columns:
-              def normalize_title(text):
-                  if pd.isna(text): return ""
-                  return re.sub(r'\s+', '', str(text)).lower()
+              def normalize_title(t):
+                  if pd.isna(t): return ""
+                  return re.sub(r'\s+', '', str(t)).lower()
               
               merged['_norm'] = merged['title'].apply(normalize_title)
               before = len(merged)
               merged = merged.drop_duplicates(subset=['_norm'], keep='first')
               merged = merged.drop(columns=['_norm'])
-              print(f"🧹 중복 제거: {before} → {len(merged)} rows")
+              print(f"🧹 중복: {before} → {len(merged)}")
           
           if 'date' in merged.columns:
               merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
@@ -176,21 +166,17 @@ jobs:
           today = datetime.now().strftime('%y%m%d_%H%M%S')
           output = f'merged/{today}_competitor.csv'
           merged.to_csv(output, index=False, encoding='utf-8-sig')
-          print(f"\n✅ 통합: {output}")
-          print(f"📊 최종: {len(merged)} rows")
+          print(f"\n✅ {output}: {len(merged)} rows")
           
           if 'provider' in merged.columns:
               print("\n=== 사이트별 통계 ===")
               print(merged['provider'].value_counts())
           PYEOF
       
-      - name: Show merged result
-        run: ls -lah merged/
-      
-      - name: Upload merged final
+      - name: Upload merged
         uses: actions/upload-artifact@v4
         with:
           name: scrapling-merged-final-${{ github.run_id }}
           path: merged/*.csv
           retention-days: 30
-          if-no-files-found: error
+          if-no-files-found: warn

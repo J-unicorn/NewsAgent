@@ -1,12 +1,56 @@
 """
-공통 크롤러 헬퍼 - Scrapling 기반
-모든 사이트 크롤러가 공유하는 함수들
+공통 크롤러 헬퍼 - Scrapling 0.4.x 호환
+
+주요 변경:
+- css_first → css(selector)[0] 또는 first() 헬퍼 함수
+- StealthyFetcher 지원 추가
 """
 
-from scrapling.fetchers import Fetcher
+from scrapling.fetchers import Fetcher, StealthyFetcher
 from datetime import datetime, timedelta
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def css_first(element, selector):
+    """
+    CSS 셀렉터로 첫 번째 요소 가져오기 (안전)
+    Selector 또는 Selectors 객체 모두 지원
+    """
+    try:
+        results = element.css(selector)
+        if results and len(results) > 0:
+            return results[0]
+        return None
+    except Exception:
+        return None
+
+
+def get_text(element, default=''):
+    """요소에서 텍스트 추출 (안전)"""
+    if element is None:
+        return default
+    try:
+        if hasattr(element, 'text'):
+            text = element.text
+            if hasattr(text, 'strip'):
+                return text.strip()
+            return str(text).strip() if text else default
+        return default
+    except Exception:
+        return default
+
+
+def get_attr(element, attr_name, default=''):
+    """요소에서 속성값 추출 (안전)"""
+    if element is None:
+        return default
+    try:
+        if hasattr(element, 'attrib'):
+            return element.attrib.get(attr_name, default)
+        return default
+    except Exception:
+        return default
 
 
 def parse_date_flexible(date_str, current_year=None):
@@ -17,19 +61,15 @@ def parse_date_flexible(date_str, current_year=None):
     if current_year is None:
         current_year = datetime.now().year
     
-    date_str = date_str.strip()
+    date_str = str(date_str).strip()
     
     patterns = [
-        # 2026-05-04 12:30:45
         (r'(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})',
          lambda m: datetime(int(m[0]), int(m[1]), int(m[2]), int(m[3]), int(m[4]), int(m[5]))),
-        # 2026-05-04 12:30
         (r'(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s+(\d{1,2}):(\d{2})',
          lambda m: datetime(int(m[0]), int(m[1]), int(m[2]), int(m[3]), int(m[4]))),
-        # 2026.05.04
         (r'(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})',
          lambda m: datetime(int(m[0]), int(m[1]), int(m[2]))),
-        # 05.04 12:30 (연도 생략)
         (r'(\d{1,2})[.\-/](\d{1,2})\s+(\d{1,2}):(\d{2})',
          lambda m: datetime(current_year, int(m[0]), int(m[1]), int(m[2]), int(m[3]))),
     ]
@@ -44,12 +84,21 @@ def parse_date_flexible(date_str, current_year=None):
     return None
 
 
-def safe_fetch(url, timeout=10, max_retries=2):
-    """재시도 로직이 있는 안전한 fetch"""
+def safe_fetch(url, timeout=10, max_retries=2, use_stealth=False):
+    """
+    재시도 로직이 있는 안전한 fetch
+    use_stealth=True면 StealthyFetcher (느림, Cloudflare 우회)
+    """
     last_error = None
+    fetcher = StealthyFetcher if use_stealth else Fetcher
+    
     for attempt in range(max_retries):
         try:
-            return Fetcher.get(url, stealthy_headers=True, timeout=timeout)
+            if use_stealth:
+                # StealthyFetcher는 다른 옵션
+                return fetcher.fetch(url, headless=True, network_idle=True)
+            else:
+                return fetcher.get(url, stealthy_headers=True, timeout=timeout)
         except Exception as e:
             last_error = e
             if attempt < max_retries - 1:
@@ -58,18 +107,7 @@ def safe_fetch(url, timeout=10, max_retries=2):
 
 
 def parallel_fetch_details(article_list, detail_parser, max_workers=10, site_name=''):
-    """
-    기사 본문을 병렬로 가져오기
-    
-    Args:
-        article_list: [{'url': ..., 'title': ..., ...}, ...]
-        detail_parser: URL을 받아 dict 반환하는 함수
-        max_workers: 동시 실행 수
-        site_name: 로그용
-    
-    Returns:
-        병합된 결과 리스트
-    """
+    """기사 본문 병렬 수집"""
     if not article_list:
         return []
     
@@ -85,7 +123,6 @@ def parallel_fetch_details(article_list, detail_parser, max_workers=10, site_nam
             art = future_to_article[future]
             try:
                 detail = future.result()
-                # 기본 정보 + 상세 정보 병합 (detail이 우선)
                 merged = {**art, **detail}
                 results.append(merged)
                 
@@ -93,26 +130,26 @@ def parallel_fetch_details(article_list, detail_parser, max_workers=10, site_nam
                     print(f"[{site_name}] 진행: {i}/{len(article_list)}")
             except Exception as e:
                 print(f"[{site_name}] {art.get('url', '')[:60]} 실패: {e}")
-                # 실패해도 기본 정보는 보존
                 results.append({**art, 'content': ''})
     
     return results
 
 
 def clean_text(text, max_length=2000):
-    """텍스트 정리: 공백 정규화, 길이 제한"""
+    """텍스트 정리"""
     if not text:
         return ''
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\s+', ' ', str(text)).strip()
     if len(text) > max_length:
         text = text[:max_length] + '...'
     return text
 
 
 def normalize_url(raw_link, base_url):
-    """상대 URL을 절대 URL로 변환"""
+    """상대 URL을 절대 URL로"""
     if not raw_link:
         return ''
+    raw_link = str(raw_link)
     if raw_link.startswith('http'):
         return raw_link
     return base_url.rstrip('/') + '/' + raw_link.lstrip('/')
