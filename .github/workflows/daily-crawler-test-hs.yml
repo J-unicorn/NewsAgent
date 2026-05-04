@@ -1,0 +1,89 @@
+name: Daily News Crawler (test_hs)
+
+on:
+  # 1. test_hs 브랜치에 push될 때만 자동 실행
+  push:
+    branches:
+      - test_hs
+  
+  # 2. 매일 한국 9시 자동 실행 (test_hs 브랜치 코드로)
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # 3. 수동 실행 (Actions 탭에서 버튼으로)
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout test_hs branch
+        uses: actions/checkout@v4
+        with:
+          ref: test_hs  # ← 명시적으로 test_hs 브랜치 checkout
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install Chrome browser
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests beautifulsoup4 lxml
+          pip install selenium webdriver-manager
+          pip install feedparser deep-translator numpy
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Show current branch info
+        run: |
+          echo "=== Branch info ==="
+          git branch --show-current
+          git log -1 --oneline
+      
+      - name: Create output directory
+        run: mkdir -p output
+      
+      - name: Run news collector
+        run: python news_collector.py
+        env:
+          PYTHONIOENCODING: utf-8
+      
+      - name: Check output files
+        run: |
+          echo "=== Output files ==="
+          ls -lah output/
+          echo "=== File count ==="
+          ls output/*.csv 2>/dev/null | wc -l
+      
+      - name: Upload CSV as artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-csv-${{ github.run_id }}
+          path: output/*.csv
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: Upload history file as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crawler-history-${{ github.run_id }}
+          path: output/.crawled_history.txt
+          retention-days: 90
+          if-no-files-found: ignore
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ 크롤링 실패. Logs를 확인하세요."
+          exit 1
