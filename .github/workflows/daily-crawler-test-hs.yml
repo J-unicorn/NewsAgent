@@ -1,9 +1,11 @@
-name: Daily News Crawler (Debug)
+name: Daily News Crawler (Parallel)
 
 on:
   push:
     branches:
       - test_hs
+  schedule:
+    - cron: '0 0 * * *'  # 매일 한국 9시
   workflow_dispatch:
 
 env:
@@ -12,9 +14,32 @@ env:
   PYTHONIOENCODING: utf-8
 
 jobs:
+  # ========================================
+  # Job 1: 사이트별 병렬 크롤링
+  # 11개 사이트가 동시에 각자 실행됨
+  # ========================================
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
+    
+    strategy:
+      # 한 사이트 실패해도 나머지 계속 진행
+      fail-fast: false
+      # 동시 실행 수 (GitHub 무료 한도: 20개)
+      max-parallel: 11
+      matrix:
+        site:
+          - ZDWANG
+          - CHEAA
+          - SAMSUNG
+          - TECHWORLD
+          - IROBOTNEWS
+          - BUSINESSPOST
+          - GOOGLE_NEWS
+          - AITIMES
+          - ELECTROLUX
+          - SHIPPINGNEWSNET
+          - OCEANPRESS
     
     steps:
       - name: Checkout test_hs branch
@@ -33,16 +58,6 @@ jobs:
         with:
           chrome-version: stable
       
-      - name: Install ChromeDriver
-        run: |
-          # Chrome 버전에 맞는 ChromeDriver 자동 설치
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
-          echo "Chrome version: $CHROME_VERSION"
-          
-          # ChromeDriver는 Chrome과 함께 설치됨 (browser-actions/setup-chrome)
-          which chromedriver || echo "chromedriver not in PATH"
-          chromedriver --version || echo "chromedriver not found"
-      
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
@@ -54,72 +69,147 @@ jobs:
             pip install feedparser deep-translator numpy
           fi
       
-      - name: Test Selenium initialization (debug)
-        run: |
-          python << 'EOF'
-          print("=== Selenium 환경 테스트 시작 ===")
-          import sys
-          print(f"Python: {sys.version}")
-          
-          import selenium
-          print(f"Selenium: {selenium.__version__}")
-          
-          from selenium import webdriver
-          from selenium.webdriver.chrome.options import Options
-          
-          options = Options()
-          options.add_argument('--headless=new')
-          options.add_argument('--no-sandbox')
-          options.add_argument('--disable-dev-shm-usage')
-          options.add_argument('--disable-gpu')
-          options.add_argument('--window-size=1920,1080')
-          
-          print("ChromeDriver 시작 시도...")
-          try:
-              driver = webdriver.Chrome(options=options)
-              driver.set_page_load_timeout(30)
-              print("✅ ChromeDriver 시작 성공!")
-              
-              print("Google.com 접속 테스트...")
-              driver.get('https://www.google.com')
-              print(f"✅ 페이지 타이틀: {driver.title}")
-              
-              driver.quit()
-              print("✅ 테스트 완료!")
-          except Exception as e:
-              print(f"❌ 실패: {e}")
-              import traceback
-              traceback.print_exc()
-              sys.exit(1)
-          EOF
-      
       - name: Create output directory
         run: mkdir -p output
       
-      - name: Run news collector (with verbose output)
+      - name: Run crawler for ${{ matrix.site }}
         run: |
-          # -u: unbuffered output (실시간 로그)
-          # timeout 1500: 25분 internal timeout
-          timeout 1500 python -u news_collector.py 2>&1 | tee output/run.log
+          echo "=== ${{ matrix.site }} 크롤링 시작 ==="
+          # SITE 환경변수로 단일 사이트만 실행
+          timeout 1200 python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log || EXIT_CODE=$?
+          echo "=== Exit code: ${EXIT_CODE:-0} ==="
         env:
+          SITE: ${{ matrix.site }}
           PYTHONIOENCODING: utf-8
           PYTHONUNBUFFERED: 1
         continue-on-error: true
       
-      - name: Show last logs
+      - name: Show output
         if: always()
         run: |
-          echo "=== Last 50 lines of run.log ==="
-          tail -50 output/run.log || echo "No log file"
-          echo ""
-          echo "=== Output files ==="
-          ls -lah output/
+          echo "=== Output files for ${{ matrix.site }} ==="
+          ls -lah output/ || echo "No output"
       
-      - name: Upload artifacts (always)
+      - name: Upload artifact for ${{ matrix.site }}
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: news-debug-${{ github.run_id }}
+          name: news-${{ matrix.site }}-${{ github.run_id }}
           path: output/
           retention-days: 7
           if-no-files-found: warn
+
+  # ========================================
+  # Job 2: 모든 사이트 결과 병합
+  # 11개 사이트 완료 후 1개 job이 합침
+  # ========================================
+  merge:
+    needs: crawl
+    runs-on: ubuntu-latest
+    if: always()  # crawl이 일부 실패해도 머지 시도
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout test_hs
+        uses: actions/checkout@v4
+        with:
+          ref: test_hs
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install pandas
+        run: pip install pandas
+      
+      - name: Download all crawler artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./all-results
+          pattern: news-*-${{ github.run_id }}
+      
+      - name: Show downloaded files
+        run: |
+          echo "=== Downloaded artifacts ==="
+          find all-results -type f | head -50
+      
+      - name: Merge all CSVs
+        run: |
+          mkdir -p merged
+          python << 'PYEOF'
+          import pandas as pd
+          import glob
+          import os
+          import re
+          from datetime import datetime
+          
+          # 모든 CSV 찾기
+          all_csvs = glob.glob('all-results/**/*.csv', recursive=True)
+          print(f"Found {len(all_csvs)} CSV files")
+          
+          if not all_csvs:
+              print("⚠️ No CSV files found")
+              exit(0)
+          
+          dfs = []
+          for csv in sorted(all_csvs):
+              try:
+                  df = pd.read_csv(csv, encoding='utf-8-sig')
+                  if not df.empty:
+                      dfs.append(df)
+                      print(f"  ✓ {csv}: {len(df)} rows")
+                  else:
+                      print(f"  ⚪ {csv}: empty (skipped)")
+              except Exception as e:
+                  print(f"  ✗ {csv}: {e}")
+          
+          if not dfs:
+              print("❌ 병합할 데이터가 없습니다")
+              exit(0)
+          
+          # 모든 사이트 결과 병합
+          merged = pd.concat(dfs, ignore_index=True)
+          print(f"\n📊 병합 전: {len(merged)} rows")
+          
+          # 중복 제거 (제목 기준)
+          if 'title' in merged.columns:
+              def normalize_title(text):
+                  if pd.isna(text): return ""
+                  return re.sub(r'\s+', '', str(text)).lower()
+              
+              merged['_norm_title'] = merged['title'].apply(normalize_title)
+              before = len(merged)
+              merged = merged.drop_duplicates(subset=['_norm_title'], keep='first')
+              merged = merged.drop(columns=['_norm_title'])
+              print(f"🧹 중복 제거: {before} → {len(merged)} rows")
+          
+          # 날짜 정렬
+          if 'date' in merged.columns:
+              merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
+          
+          # 통합 결과 저장
+          today_str = datetime.now().strftime('%y%m%d_%H%M%S')
+          output_path = f'merged/{today_str}_competitor.csv'
+          merged.to_csv(output_path, index=False, encoding='utf-8-sig')
+          print(f"\n✅ 통합 완료: {output_path}")
+          print(f"📊 최종 레코드 수: {len(merged)}")
+          
+          # 사이트별 통계
+          if 'provider' in merged.columns:
+              print("\n=== 사이트별 통계 ===")
+              print(merged['provider'].value_counts())
+          PYEOF
+      
+      - name: Show merged result
+        run: |
+          echo "=== Merged files ==="
+          ls -lah merged/
+      
+      - name: Upload merged final artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-merged-final-${{ github.run_id }}
+          path: merged/*.csv
+          retention-days: 30
+          if-no-files-found: error
