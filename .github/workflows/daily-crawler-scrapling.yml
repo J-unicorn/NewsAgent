@@ -34,31 +34,30 @@ jobs:
         with:
           ref: test_scrapling
       
-      # 🚀 uv 설치 (10-100배 빠른 pip 대체재)
+      # 🚀 uv 설치 (캐시 비활성화 - uv.lock 없어서)
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
-          enable-cache: true
+          # enable-cache 제거 → uv.lock 없어도 OK
       
       - name: Set up Python 3.11
         run: uv python install 3.11
       
-      # 🚀 uv로 Scrapling 0.4.7 설치 (매우 빠름)
+      # 🚀 uv로 Scrapling 0.4.7 설치
       - name: Install dependencies with uv
         run: |
-          # uv가 자동으로 venv 만들어서 격리된 환경에 설치
-          uv venv
+          uv venv --python 3.11
           source .venv/bin/activate
           
-          # Scrapling 최신 + 의존성
+          # Scrapling 0.4+ 명시적 설치
           uv pip install "scrapling[fetchers]>=0.4.2" pandas
           
           echo ""
           echo "=== 설치된 패키지 ==="
           uv pip list | grep -iE "scrapling|playwright|lxml|cssselect"
       
-      # 🆕 정확한 API 검증 (0.4+ 기준)
+      # 🆕 Scrapling 0.4+ API 검증
       - name: Verify Scrapling 0.4+ API
         run: |
           source .venv/bin/activate
@@ -75,46 +74,46 @@ jobs:
               print(f"❌ 0.4+ 필요. 현재: {v}")
               sys.exit(1)
           
-          # API 검증 (0.4+ 정확한 방식)
+          # API 검증
           from scrapling.parser import Selector
           dummy = Selector('<html><body><a href="x">test</a></body></html>')
           
-          # 1. .css() 메서드
           assert hasattr(dummy, 'css'), "css 메서드 없음"
           
-          # 2. Selectors의 .first 속성 (0.4+)
           links = dummy.css('a')
           print(f"✅ css() 반환 타입: {type(links).__name__}")
           
+          # 0.4+ : Selectors.first 속성
           if hasattr(links, 'first'):
               first = links.first
-              print(f"✅ .first 속성 사용 가능: {type(first).__name__}")
+              print(f"✅ .first 속성: {type(first).__name__}")
           else:
-              # [0] 인덱싱 사용
               first = links[0] if len(links) > 0 else None
-              print(f"✅ [0] 인덱싱 사용: {type(first).__name__}")
+              print(f"✅ [0] 인덱싱: {type(first).__name__}")
           
-          # 3. 자식에서 .css() 호출
           if first:
-              children = first.css('::text')
-              print(f"✅ 자식 .css(): {type(children).__name__}")
-              text = children.get() if hasattr(children, 'get') else None
-              print(f"✅ 텍스트: {text}")
+              # 텍스트 추출
+              text = first.text if hasattr(first, 'text') else None
+              print(f"✅ .text 속성: {text}")
+              
+              # 속성 추출
+              if hasattr(first, 'attrib'):
+                  href = first.attrib.get('href', '')
+                  print(f"✅ .attrib['href']: {href}")
+              
+              # 자식 css 호출
+              text_handler = first.css('::text')
+              if hasattr(text_handler, 'get'):
+                  print(f"✅ css('::text').get(): {text_handler.get()}")
           
-          # 4. .attrib 사용
-          if first and hasattr(first, 'attrib'):
-              href = first.attrib.get('href', '')
-              print(f"✅ attrib: {href}")
-          
-          print("\n✅ 모든 0.4+ API 검증 통과")
+          print("\n✅ Scrapling 0.4+ API 검증 통과")
           PYEOF
       
-      # 🆕 BUSINESSPOST는 브라우저 필요
+      # BUSINESSPOST는 브라우저 필요
       - name: Install Scrapling browsers
         if: matrix.site == 'BUSINESSPOST'
         run: |
           source .venv/bin/activate
-          # 0.4+에서는 'scrapling install' 사용
           scrapling install || python -m playwright install chromium --with-deps
       
       - name: Create output directory
@@ -159,11 +158,16 @@ jobs:
         with:
           ref: test_scrapling
       
-      - uses: astral-sh/setup-uv@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      
       - run: uv python install 3.11
       
-      - run: |
-          uv venv
+      - name: Install pandas
+        run: |
+          uv venv --python 3.11
           source .venv/bin/activate
           uv pip install pandas
       
