@@ -65,17 +65,17 @@ import businesspost_crawler
 # 각 크롤러의 인스턴스나 실행 함수를 리스트에 담아 관리합니다.
 # 만약 앞서 리팩토링한 것처럼 클래스 형태라면 인스턴스를 생성합니다.
 crawler_tasks = [
-    {"name": "ZDWANG", "func": zdwang_crawler.get_zdwang_data},
-    {"name": "CHEAA", "func": cheaa_crawler.get_cheaa_data},
-    {"name": "SAMSUNG", "func": lambda driver, d, m, s: samsung_crawler.SamsungCrawler().run(driver, d, m, s)},
-    {"name": "TECHWORLD", "func": techworld_crawler.scrape_techworld_news},
-    {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
-    {"name": "BUSINESSPOST", "func": businesspost_crawler.get_businesspost_data},
+    # {"name": "ZDWANG", "func": zdwang_crawler.get_zdwang_data},
+    # {"name": "CHEAA", "func": cheaa_crawler.get_cheaa_data},
+    # {"name": "SAMSUNG", "func": lambda driver, d, m, s: samsung_crawler.SamsungCrawler().run(driver, d, m, s)},
+    # {"name": "TECHWORLD", "func": techworld_crawler.scrape_techworld_news},
+    # {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
+    # {"name": "BUSINESSPOST", "func": businesspost_crawler.get_businesspost_data},
     {"name": "GOOGLE_NEWS", "func": google_news_crawler.get_google_news_data},
     {"name": "AITIMES", "func": aitimes_crawler.get_aitimes_data},
-    {"name": "ELECTROLUX", "func": electrolux_crawler.get_electrolux_data},
-    {"name": "SHIPPINGNEWSNET", "func": shippingnewsnet_crawler.get_shippingnewsnet_data},
-    {"name": "OCEANPRESS", "func": oceanpress_crawler.get_oceanpress_data}
+    # {"name": "ELECTROLUX", "func": electrolux_crawler.get_electrolux_data},
+    # {"name": "SHIPPINGNEWSNET", "func": shippingnewsnet_crawler.get_shippingnewsnet_data},
+    # {"name": "OCEANPRESS", "func": oceanpress_crawler.get_oceanpress_data}
 ]
 
 all_data = []
