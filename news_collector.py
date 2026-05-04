@@ -1,12 +1,12 @@
 """
-News Collector - Scrapling 기반 (Phase 1)
-3개 사이트만 마이그레이션: AITIMES, TECHWORLD, BUSINESSPOST
+News Collector - Scrapling 기반
+RSS-first + selector fallback 크롤러
 
 병렬 처리 지원:
 - SITE 환경변수로 단일 사이트만 실행 가능
 - 예: SITE=AITIMES python news_collector.py
 
-Selenium 대비 예상 향상: 10-15배
+Selenium 의존성 제거, GitHub Actions matrix 병렬 실행 지원
 """
 
 import pandas as pd
@@ -18,11 +18,19 @@ from datetime import datetime
 sys.stdout.reconfigure(encoding='utf-8')
 
 # ============================================================
-# Scrapling 마이그레이션된 크롤러 (Phase 1)
+# Scrapling 마이그레이션된 크롤러
 # ============================================================
 import aitimes_crawler
 import techworld_crawler
 import businesspost_crawler
+import samsung_crawler
+import electrolux_crawler
+import cheaa_crawler
+import zdwang_crawler
+import irobotnews_crawler
+import oceanpress_crawler
+import shippingnewsnet_crawler
+import google_news_crawler
 
 # ============================================================
 # 설정
@@ -43,12 +51,12 @@ COLUMNS = [
 TARGET_SITE = os.getenv('SITE', '').upper().strip()
 
 print(f"\n🚀 Scrapling 기반 뉴스 수집 시작 (최근 {DATE_THRESHOLD}일치)")
-print(f"📦 Phase 1: AITIMES, TECHWORLD, BUSINESSPOST (3개 사이트)")
+print(f"📦 RSS-first + selector fallback 전체 크롤러")
 
 if TARGET_SITE:
     print(f"🎯 단일 사이트 모드: {TARGET_SITE}")
 else:
-    print(f"📋 전체 사이트 모드 (3개 순차 실행)")
+    print(f"📋 전체 사이트 모드")
 
 # ============================================================
 # 출력 디렉토리
@@ -73,19 +81,27 @@ if os.path.exists(history_file):
 print(f"📖 수집 기록: {len(global_seen_links)}개 기사 건너뛰기")
 
 # ============================================================
-# 크롤러 등록 (Phase 1: 3개만)
+# 크롤러 등록
 # ============================================================
 ALL_CRAWLER_TASKS = [
     {"name": "AITIMES", "func": aitimes_crawler.get_aitimes_data},
     {"name": "TECHWORLD", "func": techworld_crawler.get_techworld_data},
     {"name": "BUSINESSPOST", "func": businesspost_crawler.get_businesspost_data},
+    {"name": "SAMSUNG", "func": samsung_crawler.get_samsung_data},
+    {"name": "ELECTROLUX", "func": electrolux_crawler.get_electrolux_data},
+    {"name": "CHEAA", "func": cheaa_crawler.get_cheaa_data},
+    {"name": "ZDWANG", "func": zdwang_crawler.get_zdwang_data},
+    {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
+    {"name": "OCEANPRESS", "func": oceanpress_crawler.get_oceanpress_data},
+    {"name": "SHIPPINGNEWSNET", "func": shippingnewsnet_crawler.get_shippingnewsnet_data},
+    {"name": "GOOGLE_NEWS", "func": google_news_crawler.get_google_news_data},
 ]
 
 # 단일 사이트 모드 처리
 if TARGET_SITE:
     crawler_tasks = [t for t in ALL_CRAWLER_TASKS if t['name'] == TARGET_SITE]
     if not crawler_tasks:
-        print(f"❌ Phase 1에 없는 사이트: {TARGET_SITE}")
+        print(f"❌ 등록되지 않은 사이트: {TARGET_SITE}")
         print(f"   사용 가능: {[t['name'] for t in ALL_CRAWLER_TASKS]}")
         sys.exit(1)
 else:

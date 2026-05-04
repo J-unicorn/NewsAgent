@@ -17,16 +17,24 @@ env:
 jobs:
   crawl:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 20
       matrix:
         site:
           - AITIMES
           - TECHWORLD
           - BUSINESSPOST
+          - SAMSUNG
+          - ELECTROLUX
+          - CHEAA
+          - ZDWANG
+          - IROBOTNEWS
+          - OCEANPRESS
+          - SHIPPINGNEWSNET
+          - GOOGLE_NEWS
     
     steps:
       - name: Checkout test_scrapling
@@ -44,19 +52,18 @@ jobs:
       - name: Set up Python 3.11
         run: uv python install 3.11
       
-      # 🚀 uv로 Scrapling 0.4.7 설치 (매우 빠름)
+      # 🚀 uv로 의존성 설치
       - name: Install dependencies with uv
         run: |
           # uv가 자동으로 venv 만들어서 격리된 환경에 설치
           uv venv
           source .venv/bin/activate
           
-          # Scrapling 최신 + 의존성
-          uv pip install "scrapling[fetchers]>=0.4.2" pandas
+          uv pip install -r requirements.txt
           
           echo ""
           echo "=== 설치된 패키지 ==="
-          uv pip list | grep -iE "scrapling|playwright|lxml|cssselect"
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator"
       
       # 🆕 정확한 API 검증 (0.4+ 기준)
       - name: Verify Scrapling 0.4+ API
@@ -108,14 +115,6 @@ jobs:
           
           print("\n✅ 모든 0.4+ API 검증 통과")
           PYEOF
-      
-      # 🆕 BUSINESSPOST는 브라우저 필요
-      - name: Install Scrapling browsers
-        if: matrix.site == 'BUSINESSPOST'
-        run: |
-          source .venv/bin/activate
-          # 0.4+에서는 'scrapling install' 사용
-          scrapling install || python -m playwright install chromium --with-deps
       
       - name: Create output directory
         run: mkdir -p output
