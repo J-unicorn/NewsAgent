@@ -1,11 +1,11 @@
-"""TECHWORLD Scrapling 크롤러 (정확한 공식 API)"""
+"""TECHWORLD Scrapling 크롤러 (Scrapling 0.4.7 정확한 API)"""
 
 from scrapling.fetchers import Fetcher
 from datetime import datetime, timedelta
 import re
 from crawler_common import (
-    safe_text, safe_attr, clean_text, normalize_url,
-    parse_date_flexible, parallel_fetch_details
+    first_element, get_text, get_attr, clean_text,
+    normalize_url, parse_date_flexible, parallel_fetch_details
 )
 
 
@@ -31,8 +31,8 @@ def fetch_techworld_detail(article_url):
     try:
         page = Fetcher.get(article_url, stealthy_headers=True, timeout=10)
         
-        content_elem = page.css_first('#article-view-content-div')
-        content = clean_text(safe_text(content_elem))
+        content_elem = first_element(page, '#article-view-content-div')
+        content = clean_text(get_text(content_elem))
         
         return {
             'content': content,
@@ -60,7 +60,6 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         print(f"[TECHWORLD] 목록 실패: {e}")
         return []
     
-    # 'li' 광범위. 각 li에서 h2.titles a 있는 것만 필터링
     items = page.css('li')
     print(f"[TECHWORLD] {len(items)}개 li 발견 (필터링 중)")
     
@@ -70,13 +69,13 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         if len(articles_to_fetch) >= max_items:
             break
         
-        # 자식 요소: item은 Selector이므로 css_first 사용 가능
-        a_tag = item.css_first('h2.titles a')
+        # 0.4+: first_element 헬퍼
+        a_tag = first_element(item, 'h2.titles a')
         if not a_tag:
             continue
         
-        title_text = safe_text(a_tag)
-        raw_link = safe_attr(a_tag, 'href')
+        title_text = get_text(a_tag)
+        raw_link = get_attr(a_tag, 'href')
         
         if not title_text or not raw_link:
             continue
@@ -89,8 +88,8 @@ def get_techworld_data(driver=None, days=1, max_items=100, seen_links=None):
         category, title = extract_category_from_title(title_text)
         
         # 날짜
-        date_elem = item.css_first('em.info.dated')
-        date_str = safe_text(date_elem)
+        date_elem = first_element(item, 'em.info.dated')
+        date_str = get_text(date_elem)
         article_date = parse_date_flexible(date_str)
         
         if article_date and article_date < threshold_date:
@@ -128,5 +127,3 @@ if __name__ == '__main__':
     data = get_techworld_data(days=1, max_items=20)
     elapsed = time.time() - start
     print(f"\n✅ {len(data)}개 기사, {elapsed:.1f}초")
-    if data:
-        print(f"\n샘플: {data[0]['title']}")

@@ -1,4 +1,4 @@
-name: Daily News Crawler (Scrapling Final)
+name: Daily News Crawler (Scrapling 0.4.7 + uv)
 
 on:
   push:
@@ -34,43 +34,95 @@ jobs:
         with:
           ref: test_scrapling
       
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # 🚀 uv 설치 (10-100배 빠른 pip 대체재)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          version: "latest"
+          enable-cache: true
       
-      # 🆕 최신 Scrapling 강제 설치
-      - name: Install Scrapling (latest)
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+      
+      # 🚀 uv로 Scrapling 0.4.7 설치 (매우 빠름)
+      - name: Install dependencies with uv
         run: |
-          python -m pip install --upgrade pip
-          # 최신 버전 설치 (>=0.4)
-          pip install --upgrade "scrapling[fetchers]"
-          pip install pandas
+          # uv가 자동으로 venv 만들어서 격리된 환경에 설치
+          uv venv
+          source .venv/bin/activate
           
-          # 버전 확인
-          python -c "import scrapling; print(f'Scrapling version: {scrapling.__version__}')"
+          # Scrapling 최신 + 의존성
+          uv pip install "scrapling[fetchers]>=0.4.2" pandas
+          
+          echo ""
+          echo "=== 설치된 패키지 ==="
+          uv pip list | grep -iE "scrapling|playwright|lxml|cssselect"
       
-      # 🆕 BUSINESSPOST는 StealthyFetcher 필요 → Playwright 브라우저 설치
-      - name: Install Scrapling browsers (StealthyFetcher)
+      # 🆕 정확한 API 검증 (0.4+ 기준)
+      - name: Verify Scrapling 0.4+ API
+        run: |
+          source .venv/bin/activate
+          python << 'PYEOF'
+          import sys
+          import scrapling
+          v = scrapling.__version__
+          print(f"📌 Scrapling 버전: {v}")
+          
+          # 버전 체크
+          parts = v.split('.')
+          major, minor = int(parts[0]), int(parts[1])
+          if major == 0 and minor < 4:
+              print(f"❌ 0.4+ 필요. 현재: {v}")
+              sys.exit(1)
+          
+          # API 검증 (0.4+ 정확한 방식)
+          from scrapling.parser import Selector
+          dummy = Selector('<html><body><a href="x">test</a></body></html>')
+          
+          # 1. .css() 메서드
+          assert hasattr(dummy, 'css'), "css 메서드 없음"
+          
+          # 2. Selectors의 .first 속성 (0.4+)
+          links = dummy.css('a')
+          print(f"✅ css() 반환 타입: {type(links).__name__}")
+          
+          if hasattr(links, 'first'):
+              first = links.first
+              print(f"✅ .first 속성 사용 가능: {type(first).__name__}")
+          else:
+              # [0] 인덱싱 사용
+              first = links[0] if len(links) > 0 else None
+              print(f"✅ [0] 인덱싱 사용: {type(first).__name__}")
+          
+          # 3. 자식에서 .css() 호출
+          if first:
+              children = first.css('::text')
+              print(f"✅ 자식 .css(): {type(children).__name__}")
+              text = children.get() if hasattr(children, 'get') else None
+              print(f"✅ 텍스트: {text}")
+          
+          # 4. .attrib 사용
+          if first and hasattr(first, 'attrib'):
+              href = first.attrib.get('href', '')
+              print(f"✅ attrib: {href}")
+          
+          print("\n✅ 모든 0.4+ API 검증 통과")
+          PYEOF
+      
+      # 🆕 BUSINESSPOST는 브라우저 필요
+      - name: Install Scrapling browsers
         if: matrix.site == 'BUSINESSPOST'
         run: |
-          # Scrapling 공식: 브라우저 자동 설치
-          scrapling install
-          
-          # 백업: 직접 설치
-          # python -m playwright install chromium --with-deps
-      
-      - name: Show environment
-        run: |
-          python --version
-          pip list | grep -iE "scrapling|playwright|lxml|cssselect"
+          source .venv/bin/activate
+          # 0.4+에서는 'scrapling install' 사용
+          scrapling install || python -m playwright install chromium --with-deps
       
       - name: Create output directory
         run: mkdir -p output
       
       - name: Run crawler for ${{ matrix.site }}
         run: |
+          source .venv/bin/activate
           echo "=== ${{ matrix.site }} 크롤링 시작 ==="
           time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
         env:
@@ -107,11 +159,13 @@ jobs:
         with:
           ref: test_scrapling
       
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.11
       
-      - run: pip install pandas
+      - run: |
+          uv venv
+          source .venv/bin/activate
+          uv pip install pandas
       
       - uses: actions/download-artifact@v4
         with:
@@ -120,11 +174,11 @@ jobs:
       
       - name: Merge CSVs
         run: |
+          source .venv/bin/activate
           mkdir -p merged
           python << 'PYEOF'
           import pandas as pd
           import glob
-          import os
           import re
           from datetime import datetime
           
@@ -133,7 +187,6 @@ jobs:
           print(f"Found {len(all_csvs)} CSV files")
           
           if not all_csvs:
-              print("⚠️ No CSV files")
               exit(0)
           
           dfs = []
@@ -155,12 +208,11 @@ jobs:
               def normalize_title(t):
                   if pd.isna(t): return ""
                   return re.sub(r'\s+', '', str(t)).lower()
-              
               merged['_norm'] = merged['title'].apply(normalize_title)
               before = len(merged)
               merged = merged.drop_duplicates(subset=['_norm'], keep='first')
               merged = merged.drop(columns=['_norm'])
-              print(f"🧹 중복: {before} → {len(merged)}")
+              print(f"중복: {before} → {len(merged)}")
           
           if 'date' in merged.columns:
               merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
@@ -168,7 +220,7 @@ jobs:
           today = datetime.now().strftime('%y%m%d_%H%M%S')
           output = f'merged/{today}_competitor.csv'
           merged.to_csv(output, index=False, encoding='utf-8-sig')
-          print(f"\n✅ {output}: {len(merged)} rows")
+          print(f"✅ {output}: {len(merged)} rows")
           
           if 'provider' in merged.columns:
               print(merged['provider'].value_counts())

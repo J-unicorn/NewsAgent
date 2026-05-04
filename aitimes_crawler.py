@@ -1,20 +1,17 @@
 """
-AITIMES Scrapling 크롤러 (정확한 공식 API)
+AITIMES Scrapling 크롤러 (Scrapling 0.4.7 정확한 API)
 
-공식 API 사용 패턴:
-- page.css('selector')              → Selectors (List of Selector)
-- page.css_first('selector')        → 첫 번째 Selector (10% 빠름)
-- selector.css('selector')          → 자식 Selectors (Selector에서 호출 시 작동!)
-- selector.css_first('selector')    → 자식 첫 번째 (Selector에서 작동!)
-- selector.text                     → TextHandler (str-like)
-- selector.attrib['key']            → 속성값
+API 변경 (0.4+):
+- css_first 제거됨
+- 대신: css(...).first 또는 css(...)[0]
+- 헬퍼: first_element(parent, selector)
 """
 
 from scrapling.fetchers import Fetcher
 from datetime import datetime, timedelta
 from crawler_common import (
-    safe_text, safe_attr, clean_text, normalize_url,
-    parallel_fetch_details
+    first_element, get_text, get_attr, clean_text,
+    normalize_url, parallel_fetch_details
 )
 
 
@@ -24,18 +21,23 @@ BASE_URL = 'https://www.aitimes.com'
 def fetch_aitimes_detail(article_url):
     """단일 기사 본문"""
     try:
-        # adaptive=True: 사이트 변경에 자동 적응
         page = Fetcher.get(article_url, stealthy_headers=True, timeout=10)
         
-        # css_first는 Selector 반환 (없으면 None 반환)
-        content_elem = page.css_first('#article-view-content-div')
-        content = clean_text(safe_text(content_elem))
+        # 0.4+: first_element 헬퍼 사용 (안전)
+        content_elem = first_element(page, '#article-view-content-div')
+        content = clean_text(get_text(content_elem))
         
-        category_elem = page.css_first('.article-head-category') or page.css_first('.breadcrumb a')
-        category = safe_text(category_elem)
+        category_elem = (
+            first_element(page, '.article-head-category') or
+            first_element(page, '.breadcrumb a')
+        )
+        category = get_text(category_elem)
         
-        reporter_elem = page.css_first('.byline em.name') or page.css_first('.user-info .name')
-        reporter = safe_text(reporter_elem)
+        reporter_elem = (
+            first_element(page, '.byline em.name') or
+            first_element(page, '.user-info .name')
+        )
+        reporter = get_text(reporter_elem)
         
         return {
             'content': content,
@@ -49,7 +51,7 @@ def fetch_aitimes_detail(article_url):
 
 
 def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
-    """AITIMES 크롤러 - 정확한 Scrapling API"""
+    """AITIMES 크롤러 (Scrapling 0.4+)"""
     seen_links = seen_links or set()
     threshold_date = datetime.now() - timedelta(days=days)
     
@@ -63,28 +65,23 @@ def get_aitimes_data(driver=None, days=1, max_items=100, seen_links=None):
         print(f"[AITIMES] 목록 페이지 실패: {e}")
         return []
     
-    # ✅ page.css() → Selectors (List of Selector)
+    # page.css() → Selectors (List)
     items = page.css('li.altlist-text-item')
     print(f"[AITIMES] {len(items)}개 항목 발견")
     
     articles_to_fetch = []
     
-    # ✅ items는 Selectors지만 iter하면 각 element는 Selector
-    # ✅ Selector는 css_first() 사용 가능!
     for item in items:
         if len(articles_to_fetch) >= max_items:
             break
         
-        # ✅ 자식 element에서 css_first() 사용
-        a_tag = item.css_first('a')
+        # ✅ 0.4+: first_element 헬퍼로 안전하게
+        a_tag = first_element(item, 'a')
         if not a_tag:
             continue
         
-        # ✅ Selector.text → TextHandler (str)
-        title = safe_text(a_tag)
-        
-        # ✅ Selector.attrib → AttributesHandler (dict-like)
-        raw_link = safe_attr(a_tag, 'href')
+        title = get_text(a_tag)
+        raw_link = get_attr(a_tag, 'href')
         
         if not title or not raw_link:
             continue
@@ -129,4 +126,3 @@ if __name__ == '__main__':
         print(f"\n샘플:")
         print(f"  제목: {data[0]['title']}")
         print(f"  본문 길이: {len(data[0]['content'])}")
-        print(f"  URL: {data[0]['url']}")

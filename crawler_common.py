@@ -1,49 +1,102 @@
 """
-Scrapling 0.4+ 정확한 API 사용
+공통 헬퍼 - Scrapling 0.4.7 정확한 API
 
-공식 문서 기반:
-- Selector.css() / .css_first() / .xpath() / .xpath_first()
-- Selectors (List) 는 .css() 만 가능 (css_first 없음)
-- adaptive=True로 자동 적응
-- StealthyFetcher.adaptive = True 설정 가능
+핵심 변경 (0.4+ 기준):
+- css_first 제거 → css(...).first 또는 css(...)[0] 사용
+- 텍스트: css('::text').get() 또는 .text 속성
+- 속성: css('::attr(href)').get() 또는 .attrib.get('href', '')
+- Selectors.first 속성: 안전 (None 반환)
 """
 
-from scrapling.fetchers import Fetcher, StealthyFetcher, DynamicFetcher
 from datetime import datetime, timedelta
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ============================================================
-# StealthyFetcher 글로벌 설정 (공식 권장)
-# adaptive=True: 사이트 구조 변경에 자동 적응
+# Scrapling 0.4+ 호환 헬퍼 함수들
 # ============================================================
-StealthyFetcher.adaptive = True
+
+def first_element(parent, selector):
+    """
+    부모 요소에서 셀렉터 매치 첫 번째 Selector 반환
+    Scrapling 0.4+ API 사용
+    """
+    if parent is None:
+        return None
+    try:
+        results = parent.css(selector)
+        if not results or len(results) == 0:
+            return None
+        # 0.4+: Selectors.first 속성 (안전)
+        if hasattr(results, 'first'):
+            return results.first
+        # fallback: [0] 인덱싱
+        return results[0]
+    except Exception:
+        return None
 
 
-def safe_text(element, default=''):
-    """Selector에서 텍스트 추출 (안전)"""
+def get_text(element, default=''):
+    """
+    Selector에서 텍스트 추출 (0.4+)
+    
+    여러 방법 시도:
+    1. .text 속성
+    2. css('::text').get()
+    """
     if element is None:
         return default
+    
+    # 방법 1: .text 속성 (가장 간단)
     try:
-        # Scrapling의 Selector는 .text 속성 (TextHandler 반환)
         text = element.text
-        return str(text).strip() if text else default
+        if text is not None:
+            return str(text).strip()
     except (AttributeError, TypeError):
-        return default
+        pass
+    
+    # 방법 2: css('::text').get()
+    try:
+        text_handler = element.css('::text')
+        if text_handler:
+            result = text_handler.get() if hasattr(text_handler, 'get') else None
+            if result:
+                return str(result).strip()
+    except Exception:
+        pass
+    
+    return default
 
 
-def safe_attr(element, attr_name, default=''):
-    """Selector에서 속성값 추출 (안전)"""
+def get_attr(element, attr_name, default=''):
+    """
+    Selector에서 속성값 추출 (0.4+)
+    
+    1. .attrib['name'] 직접 접근 (빠름)
+    2. css('::attr(name)').get()
+    """
     if element is None:
         return default
+    
+    # 방법 1: .attrib (가장 빠름)
     try:
-        # Scrapling의 attrib은 AttributesHandler (dict-like)
         if hasattr(element, 'attrib'):
             return str(element.attrib.get(attr_name, default))
-        return default
     except (AttributeError, TypeError):
-        return default
+        pass
+    
+    # 방법 2: css('::attr(...)').get()
+    try:
+        attr_handler = element.css(f'::attr({attr_name})')
+        if attr_handler:
+            result = attr_handler.get() if hasattr(attr_handler, 'get') else None
+            if result:
+                return str(result)
+    except Exception:
+        pass
+    
+    return default
 
 
 def parse_date_flexible(date_str, current_year=None):

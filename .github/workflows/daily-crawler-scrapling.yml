@@ -1,4 +1,4 @@
-name: Daily News Crawler (Scrapling 0.4.2+)
+name: Daily News Crawler (Scrapling 0.4.7 + uv)
 
 on:
   push:
@@ -34,83 +34,87 @@ jobs:
         with:
           ref: test_scrapling
       
-      # 🆕 캐시 없이 Python 설치
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # 🚀 uv 설치 (10-100배 빠른 pip 대체재)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: '3.11'
-          # cache 옵션 제거! (이전 0.2.x 캐시 사용 방지)
+          version: "latest"
+          enable-cache: true
       
-      # 🆕 Scrapling 0.4.2+ 강제 설치
-      - name: Install Scrapling 0.4.2+ (forced upgrade)
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+      
+      # 🚀 uv로 Scrapling 0.4.7 설치 (매우 빠름)
+      - name: Install dependencies with uv
         run: |
-          python -m pip install --upgrade pip
+          # uv가 자동으로 venv 만들어서 격리된 환경에 설치
+          uv venv
+          source .venv/bin/activate
           
-          # 기존 scrapling 완전 제거
-          pip uninstall -y scrapling || true
-          
-          # 캐시 무시 + 버전 명시 + 강제 업그레이드
-          pip install --no-cache-dir --upgrade "scrapling[fetchers]>=0.4.2"
-          pip install --no-cache-dir pandas
+          # Scrapling 최신 + 의존성
+          uv pip install "scrapling[fetchers]>=0.4.2" pandas
           
           echo ""
           echo "=== 설치된 패키지 ==="
-          pip list | grep -iE "scrapling|playwright|lxml|cssselect"
+          uv pip list | grep -iE "scrapling|playwright|lxml|cssselect"
       
-      # 🆕 Scrapling 버전 검증 (0.4+ 필수)
-      - name: Verify Scrapling version
+      # 🆕 정확한 API 검증 (0.4+ 기준)
+      - name: Verify Scrapling 0.4+ API
         run: |
+          source .venv/bin/activate
           python << 'PYEOF'
           import sys
-          try:
-              import scrapling
-              v = scrapling.__version__
-              print(f"📌 Scrapling 버전: {v}")
-              
-              # 버전 파싱
-              parts = v.split('.')
-              major = int(parts[0])
-              minor = int(parts[1]) if len(parts) > 1 else 0
-              
-              if major == 0 and minor < 4:
-                  print(f"❌ ERROR: Scrapling {v}는 너무 낮음. 0.4+ 필요")
-                  print("   pip uninstall scrapling && pip install --no-cache-dir 'scrapling[fetchers]>=0.4.2'")
-                  sys.exit(1)
-              
-              print(f"✅ Scrapling {v} OK")
-              
-              # API 검증: css_first 확인
-              from scrapling.parser import Selector
-              dummy = Selector('<html><body><a href="x">y</a></body></html>')
-              
-              if not hasattr(dummy, 'css_first'):
-                  print("❌ ERROR: css_first 메서드 없음")
-                  sys.exit(1)
-              
-              # 자식 요소에서도 확인
-              elements = dummy.css('a')
-              if elements and len(elements) > 0:
-                  first = elements[0]
-                  if not hasattr(first, 'css_first'):
-                      print(f"❌ ERROR: 자식 요소(type={type(first).__name__})에 css_first 없음")
-                      sys.exit(1)
-                  print(f"✅ 자식 요소(type={type(first).__name__})에서 css_first 사용 가능")
-              
-              print("✅ 모든 API 검증 통과")
-              
-          except ImportError as e:
-              print(f"❌ Scrapling import 실패: {e}")
+          import scrapling
+          v = scrapling.__version__
+          print(f"📌 Scrapling 버전: {v}")
+          
+          # 버전 체크
+          parts = v.split('.')
+          major, minor = int(parts[0]), int(parts[1])
+          if major == 0 and minor < 4:
+              print(f"❌ 0.4+ 필요. 현재: {v}")
               sys.exit(1)
-          except Exception as e:
-              print(f"❌ 검증 실패: {e}")
-              sys.exit(1)
+          
+          # API 검증 (0.4+ 정확한 방식)
+          from scrapling.parser import Selector
+          dummy = Selector('<html><body><a href="x">test</a></body></html>')
+          
+          # 1. .css() 메서드
+          assert hasattr(dummy, 'css'), "css 메서드 없음"
+          
+          # 2. Selectors의 .first 속성 (0.4+)
+          links = dummy.css('a')
+          print(f"✅ css() 반환 타입: {type(links).__name__}")
+          
+          if hasattr(links, 'first'):
+              first = links.first
+              print(f"✅ .first 속성 사용 가능: {type(first).__name__}")
+          else:
+              # [0] 인덱싱 사용
+              first = links[0] if len(links) > 0 else None
+              print(f"✅ [0] 인덱싱 사용: {type(first).__name__}")
+          
+          # 3. 자식에서 .css() 호출
+          if first:
+              children = first.css('::text')
+              print(f"✅ 자식 .css(): {type(children).__name__}")
+              text = children.get() if hasattr(children, 'get') else None
+              print(f"✅ 텍스트: {text}")
+          
+          # 4. .attrib 사용
+          if first and hasattr(first, 'attrib'):
+              href = first.attrib.get('href', '')
+              print(f"✅ attrib: {href}")
+          
+          print("\n✅ 모든 0.4+ API 검증 통과")
           PYEOF
       
       # 🆕 BUSINESSPOST는 브라우저 필요
       - name: Install Scrapling browsers
         if: matrix.site == 'BUSINESSPOST'
         run: |
-          # 0.4.2부터는 'scrapling install' 명령
+          source .venv/bin/activate
+          # 0.4+에서는 'scrapling install' 사용
           scrapling install || python -m playwright install chromium --with-deps
       
       - name: Create output directory
@@ -118,6 +122,7 @@ jobs:
       
       - name: Run crawler for ${{ matrix.site }}
         run: |
+          source .venv/bin/activate
           echo "=== ${{ matrix.site }} 크롤링 시작 ==="
           time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
         env:
@@ -154,11 +159,13 @@ jobs:
         with:
           ref: test_scrapling
       
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.11
       
-      - run: pip install pandas
+      - run: |
+          uv venv
+          source .venv/bin/activate
+          uv pip install pandas
       
       - uses: actions/download-artifact@v4
         with:
@@ -167,6 +174,7 @@ jobs:
       
       - name: Merge CSVs
         run: |
+          source .venv/bin/activate
           mkdir -p merged
           python << 'PYEOF'
           import pandas as pd
