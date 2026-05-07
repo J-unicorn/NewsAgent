@@ -1,0 +1,238 @@
+name: Daily News Crawler (Scrapling 0.4.7 + uv)
+
+on:
+  push:
+    branches:
+      - test_scrapling
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # 매일 09:00 KST
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PYTHONUNBUFFERED: 1
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        site:
+          - AITIMES
+          - TECHWORLD
+          - BUSINESSPOST
+          - SAMSUNG
+          - ELECTROLUX
+          - CHEAA
+          - ZDWANG
+          - IROBOTNEWS
+          - OCEANPRESS
+          - SHIPPINGNEWSNET
+          - GOOGLE_NEWS
+
+    steps:
+      - name: Checkout test_scrapling
+        uses: actions/checkout@v4
+        with:
+          ref: test_scrapling
+
+      # 🚀 uv 설치 (캐시 비활성화 - uv.lock 없어서)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+          # enable-cache 제거 → uv.lock 없어도 OK
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      # 🚀 uv로 의존성 설치
+      - name: Install dependencies with uv
+        run: |
+          uv venv --python 3.11
+          source .venv/bin/activate
+
+          uv pip install -r requirements.txt
+
+          echo ""
+          echo "=== 설치된 패키지 ==="
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator"
+
+      # 🆕 Scrapling 0.4+ API 검증
+      - name: Verify Scrapling 0.4+ API
+        run: |
+          source .venv/bin/activate
+          python << 'PYEOF'
+          import sys
+          import scrapling
+          v = scrapling.__version__
+          print(f"📌 Scrapling 버전: {v}")
+
+          # 버전 체크
+          parts = v.split('.')
+          major, minor = int(parts[0]), int(parts[1])
+          if major == 0 and minor < 4:
+              print(f"❌ 0.4+ 필요. 현재: {v}")
+              sys.exit(1)
+
+          # API 검증
+          from scrapling.parser import Selector
+          dummy = Selector('<html><body><a href="x">test</a></body></html>')
+
+          assert hasattr(dummy, 'css'), "css 메서드 없음"
+
+          links = dummy.css('a')
+          print(f"✅ css() 반환 타입: {type(links).__name__}")
+
+          # 0.4+ : Selectors.first 속성
+          if hasattr(links, 'first'):
+              first = links.first
+              print(f"✅ .first 속성: {type(first).__name__}")
+          else:
+              first = links[0] if len(links) > 0 else None
+              print(f"✅ [0] 인덱싱: {type(first).__name__}")
+
+          if first:
+              # 텍스트 추출
+              text = first.text if hasattr(first, 'text') else None
+              print(f"✅ .text 속성: {text}")
+              
+              # 속성 추출
+              if hasattr(first, 'attrib'):
+                  href = first.attrib.get('href', '')
+                  print(f"✅ .attrib['href']: {href}")
+              
+              # 자식 css 호출
+              text_handler = first.css('::text')
+              if hasattr(text_handler, 'get'):
+                  print(f"✅ css('::text').get(): {text_handler.get()}")
+
+          print("\n✅ Scrapling 0.4+ API 검증 통과")
+          PYEOF
+
+      - name: Create output directory
+        run: mkdir -p output
+
+      - name: Run crawler for ${{ matrix.site }}
+        run: |
+          source .venv/bin/activate
+          echo "=== ${{ matrix.site }} 크롤링 시작 ==="
+          time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
+        env:
+          SITE: ${{ matrix.site }}
+        continue-on-error: true
+
+      - name: Show last logs
+        if: always()
+        run: |
+          ls -lah output/ || echo "No output"
+          if [ -f output/${{ matrix.site }}_run.log ]; then
+            echo ""
+            echo "=== Last 30 lines ==="
+            tail -30 output/${{ matrix.site }}_run.log
+          fi
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrapling-${{ matrix.site }}-${{ github.run_id }}
+          path: output/
+          retention-days: 7
+          if-no-files-found: warn
+
+  merge:
+    needs: crawl
+    runs-on: ubuntu-latest
+    if: always()
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test_scrapling
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - run: uv python install 3.11
+
+      - name: Install pandas
+        run: |
+          uv venv --python 3.11
+          source .venv/bin/activate
+          uv pip install pandas
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ./all-results
+          pattern: scrapling-*-${{ github.run_id }}
+
+      - name: Merge CSVs
+        run: |
+          source .venv/bin/activate
+          mkdir -p merged
+          python << 'PYEOF'
+          import pandas as pd
+          import glob
+          import re
+          from datetime import datetime
+
+          all_csvs = glob.glob('all-results/**/*.csv', recursive=True)
+          all_csvs = [c for c in all_csvs if not c.endswith('_empty.csv')]
+          print(f"Found {len(all_csvs)} CSV files")
+
+          if not all_csvs:
+              exit(0)
+
+          dfs = []
+          for csv in sorted(all_csvs):
+              try:
+                  df = pd.read_csv(csv, encoding='utf-8-sig')
+                  if not df.empty:
+                      dfs.append(df)
+                      print(f"  ✓ {csv}: {len(df)} rows")
+              except Exception as e:
+                  print(f"  ✗ {csv}: {e}")
+
+          if not dfs:
+              exit(0)
+
+          merged = pd.concat(dfs, ignore_index=True)
+
+          if 'title' in merged.columns:
+              def normalize_title(t):
+                  if pd.isna(t): return ""
+                  return re.sub(r'\s+', '', str(t)).lower()
+              merged['_norm'] = merged['title'].apply(normalize_title)
+              before = len(merged)
+              merged = merged.drop_duplicates(subset=['_norm'], keep='first')
+              merged = merged.drop(columns=['_norm'])
+              print(f"중복: {before} → {len(merged)}")
+
+          if 'date' in merged.columns:
+              merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
+
+          today = datetime.now().strftime('%y%m%d_%H%M%S')
+          output = f'merged/{today}_competitor.csv'
+          merged.to_csv(output, index=False, encoding='utf-8-sig')
+          print(f"✅ {output}: {len(merged)} rows")
+
+          if 'provider' in merged.columns:
+              print(merged['provider'].value_counts())
+          PYEOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scrapling-merged-final-${{ github.run_id }}
+          path: merged/*.csv
+          retention-days: 30
+          if-no-files-found: warn
