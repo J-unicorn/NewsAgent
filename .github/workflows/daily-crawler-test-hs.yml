@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - test_hs
-  schedule:
-    - cron: '0 0 * * *'  # 매일 한국 9시
   workflow_dispatch:
 
 env:
