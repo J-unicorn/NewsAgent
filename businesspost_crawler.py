@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 import re
 import shutil
+import time
 from xml.etree import ElementTree as ET
 
 from crawler_common import (
@@ -323,6 +324,169 @@ def _collect_browser_list_articles(days=1, max_items=100, seen_links=None, steal
     return collected
 
 
+def _selenium_driver():
+    try:
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+    except Exception as exc:
+        print(f"[BUSINESSPOST] Selenium 사용 불가: {exc}")
+        return None
+
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument(
+        "--user-agent="
+        + os.getenv(
+            "BUSINESSPOST_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+    )
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+
+    chrome_path = os.getenv("BUSINESSPOST_CHROME_PATH") or ""
+    if chrome_path:
+        chrome_options.binary_location = chrome_path
+
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    except Exception as exc:
+        print(f"[BUSINESSPOST] webdriver-manager 실패, Selenium Manager 재시도: {exc}")
+        try:
+            driver = webdriver.Chrome(options=chrome_options)
+        except Exception as inner_exc:
+            print(f"[BUSINESSPOST] Selenium 드라이버 생성 실패: {inner_exc}")
+            return None
+
+    try:
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    except Exception:
+        pass
+    return driver
+
+
+def _collect_selenium_articles(days=1, max_items=100, seen_links=None):
+    try:
+        from selenium.webdriver.common.by import By
+    except Exception as exc:
+        print(f"[BUSINESSPOST] Selenium By import 실패: {exc}")
+        return []
+
+    driver = _selenium_driver()
+    if not driver:
+        return []
+
+    seen_links = set(seen_links or set())
+    visited_urls = set()
+    collected = []
+
+    try:
+        for page_no in range(1, BROWSER_MAX_PAGES + 1):
+            list_url = f"{BASE_URL}/BP?command=sub&sub=8&page={page_no}"
+            try:
+                driver.get(list_url)
+                time.sleep(2)
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+                time.sleep(1)
+                items = driver.find_elements(By.CSS_SELECTOR, "div.left_post")
+                print(f"[BUSINESSPOST] Selenium 목록 page={page_no}: {len(items)}개")
+            except Exception as exc:
+                print(f"[BUSINESSPOST] Selenium 목록 실패 ({list_url}): {exc}")
+                break
+
+            if not items:
+                break
+
+            candidates = []
+            for item in items:
+                try:
+                    link_elem = item.find_element(By.CSS_SELECTOR, "a")
+                    title_elem = item.find_element(By.CSS_SELECTOR, "h3")
+                    url = normalize_url(link_elem.get_attribute("href"), BASE_URL)
+                    title = clean_text(title_elem.text, max_length=0)
+                except Exception:
+                    continue
+                if not title or not url or url in seen_links or url in visited_urls:
+                    continue
+                visited_urls.add(url)
+                candidates.append((title, url))
+
+            if not candidates:
+                break
+
+            page_dated = 0
+            page_old = 0
+            for title, url in candidates:
+                if max_items is not None and len(collected) >= max_items:
+                    return collected
+
+                try:
+                    driver.get(url)
+                    time.sleep(1.5)
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+                    time.sleep(0.5)
+                except Exception as exc:
+                    print(f"[BUSINESSPOST] Selenium 상세 이동 실패 ({url[:80]}): {exc}")
+                    continue
+
+                category_main, category_sub = "분류", "뉴스"
+                try:
+                    category_text = driver.find_element(By.CSS_SELECTOR, "span.category").text
+                    category_main, category_sub = _split_category(category_text)
+                except Exception:
+                    pass
+
+                author_info = ""
+                article_date = None
+                try:
+                    author_info = driver.find_element(By.CSS_SELECTOR, "div.author_info").text
+                    article_date = parse_date_any(author_info)
+                except Exception:
+                    pass
+
+                if not article_date:
+                    continue
+
+                page_dated += 1
+                if not _is_recent_businesspost(article_date, days):
+                    page_old += 1
+                    continue
+
+                content = ""
+                try:
+                    content = driver.find_element(By.CSS_SELECTOR, "div.detail_editor").text
+                except Exception:
+                    pass
+
+                article = _article_base(
+                    title=title,
+                    url=url,
+                    date_obj=article_date,
+                    category_main=category_main,
+                    category_sub=category_sub,
+                    reporter=_reporter_from_author_info(author_info),
+                )
+                if content:
+                    article["content"] = content
+                collected.append(finalize_article(article))
+                print(f"[BUSINESSPOST] Selenium 수집: {article['date']} | {title[:30]}...")
+
+            if page_dated > 0 and page_old == page_dated:
+                break
+    finally:
+        driver.quit()
+
+    return collected
+
+
 def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
     if max_items is not None and max_items <= 0:
         max_items = None
@@ -359,6 +523,12 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
 
     print("[BUSINESSPOST] Stealthy 목록 실패/0건: Dynamic 목록 fallback 실행")
     results = _collect_browser_list_articles(days=days, max_items=max_items, seen_links=seen_links)
+    if results:
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
+
+    print("[BUSINESSPOST] Scrapling 브라우저 실패/0건: Selenium fallback 실행")
+    results = _collect_selenium_articles(days=days, max_items=max_items, seen_links=seen_links)
     print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
     return results
 

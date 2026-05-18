@@ -62,7 +62,7 @@ jobs:
           
           echo ""
           echo "=== 설치된 패키지 ==="
-          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|patchright|msgspec|browserforge"
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|patchright|msgspec|browserforge|selenium|webdriver"
       
       - name: Setup Chrome for BusinessPost
         if: matrix.site == 'BUSINESSPOST'
