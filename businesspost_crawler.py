@@ -353,6 +353,13 @@ def _selenium_driver():
     if chrome_path:
         chrome_options.binary_location = chrome_path
 
+    chromedriver_path = os.getenv("BUSINESSPOST_CHROMEDRIVER_PATH") or ""
+    if chromedriver_path:
+        try:
+            return webdriver.Chrome(service=Service(chromedriver_path), options=chrome_options)
+        except Exception as exc:
+            print(f"[BUSINESSPOST] 지정 ChromeDriver 실패, webdriver-manager 재시도: {exc}")
+
     try:
         from webdriver_manager.chrome import ChromeDriverManager
 

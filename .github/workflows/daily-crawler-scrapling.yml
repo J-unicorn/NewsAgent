@@ -67,23 +67,32 @@ jobs:
       - name: Setup Chrome for BusinessPost
         if: matrix.site == 'BUSINESSPOST'
         id: setup-chrome
-        uses: browser-actions/setup-chrome@v1
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
       
       - name: Export Chrome path for BusinessPost
         if: matrix.site == 'BUSINESSPOST'
         run: |
           CHROME_PATH="${{ steps.setup-chrome.outputs.chrome-path }}"
+          CHROMEDRIVER_PATH="${{ steps.setup-chrome.outputs.chromedriver-path }}"
           if [ -z "$CHROME_PATH" ]; then
             CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
           fi
+          if [ -z "$CHROMEDRIVER_PATH" ]; then
+            CHROMEDRIVER_PATH="$(command -v chromedriver || true)"
+          fi
           
-          if [ -z "$CHROME_PATH" ]; then
-            echo "Chrome binary not found"
+          if [ -z "$CHROME_PATH" ] || [ -z "$CHROMEDRIVER_PATH" ]; then
+            echo "Chrome or ChromeDriver binary not found"
             exit 1
           fi
           
           echo "BUSINESSPOST_CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+          echo "BUSINESSPOST_CHROMEDRIVER_PATH=$CHROMEDRIVER_PATH" >> "$GITHUB_ENV"
           "$CHROME_PATH" --version
+          "$CHROMEDRIVER_PATH" --version
       
       # 🆕 Scrapling 0.4+ API 검증
       - name: Verify Scrapling 0.4+ API
