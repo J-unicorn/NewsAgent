@@ -62,7 +62,7 @@ jobs:
           
           echo ""
           echo "=== 설치된 패키지 ==="
-          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|msgspec|browserforge"
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|patchright|msgspec|browserforge"
       
       - name: Setup Chrome for BusinessPost
         if: matrix.site == 'BUSINESSPOST'
@@ -104,7 +104,7 @@ jobs:
           
           # API 검증
           from scrapling.parser import Selector
-          from scrapling.fetchers import DynamicFetcher, DynamicSession
+          from scrapling.fetchers import DynamicFetcher, DynamicSession, StealthyFetcher, StealthySession
           dummy = Selector('<html><body><a href="x">test</a></body></html>')
           
           assert hasattr(dummy, 'css'), "css 메서드 없음"
@@ -137,6 +137,7 @@ jobs:
           
           print("\n✅ Scrapling 0.4+ API 검증 통과")
           print(f"✅ DynamicFetcher 준비: {DynamicFetcher.__name__}, {DynamicSession.__name__}")
+          print(f"✅ StealthyFetcher 준비: {StealthyFetcher.__name__}, {StealthySession.__name__}")
           PYEOF
       
       - name: Create output directory

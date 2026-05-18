@@ -83,7 +83,7 @@ def _is_recent_businesspost(article_date, days):
     return article_date.date() >= cutoff_date
 
 
-def _browser_kwargs():
+def _browser_kwargs(stealth=False):
     chrome_path = os.getenv("BUSINESSPOST_CHROME_PATH") or ""
     if not chrome_path:
         chrome_path = (
@@ -101,21 +101,33 @@ def _browser_kwargs():
         "wait": 500,
         "locale": "ko-KR",
         "timezone_id": "Asia/Seoul",
+        "useragent": os.getenv(
+            "BUSINESSPOST_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ),
         "extra_flags": ["--no-sandbox", "--disable-dev-shm-usage"],
         "extra_headers": {"Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"},
     }
+    if stealth:
+        kwargs.update({"hide_canvas": True, "block_webrtc": True})
     if chrome_path:
         kwargs["executable_path"] = chrome_path
     return kwargs
 
 
-def _dynamic_classes():
+def _browser_classes(stealth=False):
     try:
+        if stealth:
+            from scrapling.fetchers import StealthyFetcher, StealthySession
+
+            return StealthyFetcher, StealthySession
         from scrapling.fetchers import DynamicFetcher, DynamicSession
 
         return DynamicFetcher, DynamicSession
     except Exception as exc:
-        print(f"[BUSINESSPOST] DynamicFetcher 사용 불가: {exc}")
+        fetcher_name = "StealthyFetcher" if stealth else "DynamicFetcher"
+        print(f"[BUSINESSPOST] {fetcher_name} 사용 불가: {exc}")
         return None, None
 
 
@@ -196,16 +208,16 @@ def _browser_detail(session, url):
     return result
 
 
-def _browser_enrich_articles(articles, max_items=None):
+def _browser_enrich_articles(articles, max_items=None, stealth=False):
     if not articles:
         return []
 
-    _, DynamicSession = _dynamic_classes()
-    if not DynamicSession:
+    _, BrowserSession = _browser_classes(stealth=stealth)
+    if not BrowserSession:
         return [finalize_article(article) for article in articles]
 
     results = []
-    with DynamicSession(**_browser_kwargs()) as session:
+    with BrowserSession(**_browser_kwargs(stealth=stealth)) as session:
         for index, article in enumerate(articles, 1):
             detail = _browser_detail(session, article["provider_link_page"])
             merged = dict(article)
@@ -220,21 +232,22 @@ def _browser_enrich_articles(articles, max_items=None):
     return results
 
 
-def _collect_dynamic_rss_articles(days=1, max_items=100, seen_links=None):
-    DynamicFetcher, _ = _dynamic_classes()
-    if not DynamicFetcher:
+def _collect_browser_rss_articles(days=1, max_items=100, seen_links=None, stealth=False):
+    BrowserFetcher, _ = _browser_classes(stealth=stealth)
+    fetcher_name = "Stealthy" if stealth else "Dynamic"
+    if not BrowserFetcher:
         return []
 
     try:
-        page = DynamicFetcher.fetch(RSS_CONFIG.url, **_browser_kwargs())
+        page = BrowserFetcher.fetch(RSS_CONFIG.url, **_browser_kwargs(stealth=stealth))
     except Exception as exc:
-        print(f"[BUSINESSPOST] Dynamic RSS 수집 실패: {exc}")
+        print(f"[BUSINESSPOST] {fetcher_name} RSS 수집 실패: {exc}")
         return []
 
     status = getattr(page, "status", None) or getattr(page, "status_code", None)
-    print(f"[BUSINESSPOST] Dynamic RSS 응답: {status}")
+    print(f"[BUSINESSPOST] {fetcher_name} RSS 응답: {status}")
     articles = _parse_rss_text(response_text(page), days=days, max_items=max_items, seen_links=seen_links)
-    print(f"[BUSINESSPOST] Dynamic RSS 최근 {days}일 대상: {len(articles)}개")
+    print(f"[BUSINESSPOST] {fetcher_name} RSS 최근 {days}일 대상: {len(articles)}개")
     return articles
 
 
@@ -247,26 +260,27 @@ def _collect_http_rss_articles(days=1, max_items=100, seen_links=None):
     return articles
 
 
-def _collect_browser_list_articles(days=1, max_items=100, seen_links=None):
-    _, DynamicSession = _dynamic_classes()
-    if not DynamicSession:
+def _collect_browser_list_articles(days=1, max_items=100, seen_links=None, stealth=False):
+    _, BrowserSession = _browser_classes(stealth=stealth)
+    fetcher_name = "Stealthy" if stealth else "Dynamic"
+    if not BrowserSession:
         return []
 
     seen_links = set(seen_links or set())
     collected = []
     visited_urls = set()
 
-    with DynamicSession(**_browser_kwargs()) as session:
+    with BrowserSession(**_browser_kwargs(stealth=stealth)) as session:
         for page_no in range(1, BROWSER_MAX_PAGES + 1):
             list_url = f"{BASE_URL}/BP?command=sub&sub=8&page={page_no}"
             try:
                 page = session.fetch(list_url, wait_selector="div.left_post", wait=500, timeout=45_000)
             except Exception as exc:
-                print(f"[BUSINESSPOST] 목록 브라우저 수집 실패 ({list_url}): {exc}")
+                print(f"[BUSINESSPOST] {fetcher_name} 목록 브라우저 수집 실패 ({list_url}): {exc}")
                 break
 
             items = page.css("div.left_post")
-            print(f"[BUSINESSPOST] 브라우저 목록 page={page_no}: {len(items)}개")
+            print(f"[BUSINESSPOST] {fetcher_name} 브라우저 목록 page={page_no}: {len(items)}개")
             if not items:
                 break
 
@@ -324,13 +338,26 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
         return results
 
     print("[BUSINESSPOST] RSS 실패/0건: DynamicFetcher fallback 실행")
-    dynamic_rss_articles = _collect_dynamic_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
+    dynamic_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
     if dynamic_rss_articles:
         results = _browser_enrich_articles(dynamic_rss_articles, max_items=max_items)
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
 
-    print("[BUSINESSPOST] Dynamic RSS 실패/0건: 브라우저 목록 fallback 실행")
+    print("[BUSINESSPOST] Dynamic RSS 실패/0건: StealthyFetcher fallback 실행")
+    stealth_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links, stealth=True)
+    if stealth_rss_articles:
+        results = _browser_enrich_articles(stealth_rss_articles, max_items=max_items, stealth=True)
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
+
+    print("[BUSINESSPOST] Stealthy RSS 실패/0건: 브라우저 목록 fallback 실행")
+    results = _collect_browser_list_articles(days=days, max_items=max_items, seen_links=seen_links, stealth=True)
+    if results:
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
+
+    print("[BUSINESSPOST] Stealthy 목록 실패/0건: Dynamic 목록 fallback 실행")
     results = _collect_browser_list_articles(days=days, max_items=max_items, seen_links=seen_links)
     print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
     return results
