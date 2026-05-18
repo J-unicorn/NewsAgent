@@ -62,7 +62,28 @@ jobs:
           
           echo ""
           echo "=== 설치된 패키지 ==="
-          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator"
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|msgspec|browserforge"
+      
+      - name: Setup Chrome for BusinessPost
+        if: matrix.site == 'BUSINESSPOST'
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v1
+      
+      - name: Export Chrome path for BusinessPost
+        if: matrix.site == 'BUSINESSPOST'
+        run: |
+          CHROME_PATH="${{ steps.setup-chrome.outputs.chrome-path }}"
+          if [ -z "$CHROME_PATH" ]; then
+            CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          fi
+          
+          if [ -z "$CHROME_PATH" ]; then
+            echo "Chrome binary not found"
+            exit 1
+          fi
+          
+          echo "BUSINESSPOST_CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+          "$CHROME_PATH" --version
       
       # 🆕 Scrapling 0.4+ API 검증
       - name: Verify Scrapling 0.4+ API
@@ -83,6 +104,7 @@ jobs:
           
           # API 검증
           from scrapling.parser import Selector
+          from scrapling.fetchers import DynamicFetcher, DynamicSession
           dummy = Selector('<html><body><a href="x">test</a></body></html>')
           
           assert hasattr(dummy, 'css'), "css 메서드 없음"
@@ -114,6 +136,7 @@ jobs:
                   print(f"✅ css('::text').get(): {text_handler.get()}")
           
           print("\n✅ Scrapling 0.4+ API 검증 통과")
+          print(f"✅ DynamicFetcher 준비: {DynamicFetcher.__name__}, {DynamicSession.__name__}")
           PYEOF
       
       - name: Create output directory
