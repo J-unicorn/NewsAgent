@@ -21,7 +21,7 @@ jobs:
     
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 2
       matrix:
         site:
           - AITIMES
@@ -34,6 +34,10 @@ jobs:
           - IROBOTNEWS
           - OCEANPRESS
           - SHIPPINGNEWSNET
+          - IMPACTON
+          - GREENPOST
+          - PRNEWSWIRE
+          - NAVER_NEWS
           - GOOGLE_NEWS
     
     steps:

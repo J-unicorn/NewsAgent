@@ -31,6 +31,10 @@ import irobotnews_crawler
 import oceanpress_crawler
 import shippingnewsnet_crawler
 import google_news_crawler
+import impacton_crawler
+import greenpost_crawler
+import prnewswire_crawler
+import naver_news_crawler
 
 # ============================================================
 # 설정
@@ -94,6 +98,10 @@ ALL_CRAWLER_TASKS = [
     {"name": "IROBOTNEWS", "func": irobotnews_crawler.get_irobotnews_data},
     {"name": "OCEANPRESS", "func": oceanpress_crawler.get_oceanpress_data},
     {"name": "SHIPPINGNEWSNET", "func": shippingnewsnet_crawler.get_shippingnewsnet_data},
+    {"name": "IMPACTON", "func": impacton_crawler.get_impacton_data},
+    {"name": "GREENPOST", "func": greenpost_crawler.get_greenpost_data},
+    {"name": "PRNEWSWIRE", "func": prnewswire_crawler.get_prnewswire_data},
+    {"name": "NAVER_NEWS", "func": naver_news_crawler.get_naver_news_data},
     {"name": "GOOGLE_NEWS", "func": google_news_crawler.get_google_news_data},
 ]
 
