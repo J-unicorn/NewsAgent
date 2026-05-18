@@ -29,12 +29,14 @@ from crawler_common import (
 
 
 BASE_URL = "https://www.businesspost.co.kr"
+MOBILE_BASE_URL = "https://m.businesspost.co.kr"
 PROVIDER = "비즈니스포스트"
 BROWSER_MAX_PAGES = 5
 DETAIL_WORKERS = 2
 REQUEST_DELAY_SECONDS = 0.8
 DEFAULT_MIN_RSS_ITEMS = 20
 BLOCKED_COOLDOWN_SECONDS = 8
+MOBILE_MAX_CANDIDATES = 80
 
 RSS_CONFIG = RssConfig(
     url=f"{BASE_URL}/rss/Article.xml",
@@ -83,6 +85,25 @@ def _article_base(title, url, date_obj=None, category_main="", category_sub="", 
 
 def _article_key(article):
     return normalize_url(article.get("provider_link_page") or article.get("url"), BASE_URL)
+
+
+def _article_num(url):
+    match = re.search(r"[?&]num=(\d+)", str(url or ""))
+    return match.group(1) if match else ""
+
+
+def _canonical_article_url(url):
+    num = _article_num(url)
+    if num:
+        return f"{BASE_URL}/BP?command=article_view&num={num}"
+    return normalize_url(url, BASE_URL)
+
+
+def _mobile_article_url(url):
+    num = _article_num(url)
+    if num:
+        return f"{MOBILE_BASE_URL}/BP?command=mobile_view&num={num}"
+    return normalize_url(url, MOBILE_BASE_URL)
 
 
 def _merge_records(primary, fallback, max_items=None):
@@ -384,6 +405,116 @@ def _collect_browser_list_articles(days=1, max_items=100, seen_links=None, steal
     return collected
 
 
+def _mobile_detail(url, title=""):
+    page = fetch_page(
+        _mobile_article_url(url),
+        timeout=15,
+        site_name="BUSINESSPOST-MOBILE",
+        max_retries=2,
+        backoff_seconds=2,
+    )
+    if not page:
+        return None
+
+    wrapper = first_element(page, "article.detailwrapper")
+    title_text = get_all_text(first_element(wrapper, "section.postTitle div.title"), max_length=0) or title
+    date_text = get_all_text(first_element(wrapper, "section.postTitle div.date"), max_length=100)
+    writer_text = get_all_text(first_element(wrapper, "section.postTitle div.writer"), max_length=200)
+    article_date = parse_date_any(date_text)
+    if not title_text or not article_date:
+        return None
+
+    categories = []
+    try:
+        for item in wrapper.css("section.postTitle ul.cate li"):
+            text = get_all_text(item, max_length=100)
+            if text:
+                categories.append(text)
+    except Exception:
+        pass
+    category_main = categories[0] if categories else "분류"
+    category_sub = categories[1] if len(categories) > 1 else "뉴스"
+
+    content = get_all_text(first_element(wrapper, "section.postContent"), max_length=2_000)
+    reporter = re.sub(r"\s*[-–].*$", "", writer_text).strip()
+    article = _article_base(
+        title=title_text,
+        url=_canonical_article_url(url),
+        date_obj=article_date,
+        category_main=category_main,
+        category_sub=category_sub,
+        reporter=reporter,
+    )
+    if content:
+        article["content"] = content
+    return finalize_article(article)
+
+
+def _collect_mobile_articles(days=1, max_items=100, seen_links=None):
+    list_url = f"{MOBILE_BASE_URL}/BP?command=mobile_list&sc_cate=ALL"
+    page = fetch_page(
+        list_url,
+        timeout=15,
+        site_name="BUSINESSPOST-MOBILE",
+        max_retries=2,
+        backoff_seconds=2,
+    )
+    if not page:
+        return []
+
+    seen_links = set(seen_links or set())
+    candidates = []
+    visited = set()
+    try:
+        links = page.css('a[href*="command=mobile_view"][href*="num="]')
+    except Exception:
+        links = []
+
+    max_candidates = int(os.getenv("BUSINESSPOST_MOBILE_MAX_CANDIDATES", str(MOBILE_MAX_CANDIDATES)))
+    for link_elem in links:
+        raw_url = get_attr(link_elem, "href")
+        mobile_url = _mobile_article_url(raw_url)
+        canonical_url = _canonical_article_url(mobile_url)
+        if not canonical_url or canonical_url in seen_links or canonical_url in visited:
+            continue
+        title_elem = first_element(link_elem, "span.txtListTitle")
+        title = get_all_text(title_elem, max_length=0) or get_attr(first_element(link_elem, "img"), "alt")
+        title = clean_text(title, max_length=0)
+        if not title:
+            continue
+        visited.add(canonical_url)
+        candidates.append((title, mobile_url, canonical_url))
+        if len(candidates) >= max_candidates:
+            break
+
+    print(f"[BUSINESSPOST] 모바일 목록 후보: {len(candidates)}개")
+    results = []
+    old_after_dated = 0
+    for index, (title, mobile_url, canonical_url) in enumerate(candidates, 1):
+        article = _mobile_detail(mobile_url, title=title)
+        time.sleep(REQUEST_DELAY_SECONDS)
+        if not article:
+            continue
+        article_date = parse_date_any(article.get("date"))
+        if not article_date:
+            continue
+        if not _is_recent_businesspost(article_date, days):
+            old_after_dated += 1
+            if old_after_dated >= 10:
+                break
+            continue
+        old_after_dated = 0
+        article["provider_link_page"] = canonical_url
+        article["url"] = canonical_url
+        results.append(article)
+        print(f"[BUSINESSPOST] 모바일 수집: {article['date']} | {article['title'][:30]}...")
+        if max_items and len(results) >= max_items:
+            break
+        if index % 20 == 0:
+            print(f"[BUSINESSPOST] 모바일 상세 진행: {index}/{len(candidates)}")
+    return results
+
+
 def _selenium_driver():
     try:
         from selenium import webdriver
@@ -599,15 +730,18 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
 
     if rss_status in {403, 429} and not rss_articles:
         print(
-            f"[BUSINESSPOST] RSS {rss_status}: 추가 Scrapling 요청을 건너뛰고 "
-            f"{BLOCKED_COOLDOWN_SECONDS}s 후 Selenium fallback 실행"
+            f"[BUSINESSPOST] RSS {rss_status}: 추가 www 요청을 줄이고 "
+            f"{BLOCKED_COOLDOWN_SECONDS}s 후 모바일 fallback 실행"
         )
         time.sleep(BLOCKED_COOLDOWN_SECONDS)
-        results = _collect_selenium_articles(days=days, max_items=max_items, seen_links=seen_links)
+        results = _collect_mobile_articles(days=days, max_items=max_items, seen_links=seen_links)
         if results:
             print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
             return results
-        print("[BUSINESSPOST] Selenium fallback 0건: Scrapling 브라우저 fallback 계속 진행")
+        print("[BUSINESSPOST] 모바일 fallback 0건: Selenium fallback 실행")
+        results = _collect_selenium_articles(days=days, max_items=max_items, seen_links=seen_links)
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
 
     print("[BUSINESSPOST] RSS 실패/0건/부족: DynamicFetcher fallback 실행")
     dynamic_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
@@ -639,6 +773,12 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
 
     print("[BUSINESSPOST] Stealthy 목록 실패/0건: Dynamic 목록 fallback 실행")
     results = _collect_browser_list_articles(days=days, max_items=max_items, seen_links=seen_links)
+    if results:
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
+
+    print("[BUSINESSPOST] Scrapling 브라우저 실패/0건: 모바일 fallback 실행")
+    results = _collect_mobile_articles(days=days, max_items=max_items, seen_links=seen_links)
     if results:
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
