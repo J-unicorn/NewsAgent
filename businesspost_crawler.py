@@ -34,6 +34,7 @@ BROWSER_MAX_PAGES = 5
 DETAIL_WORKERS = 2
 REQUEST_DELAY_SECONDS = 0.8
 DEFAULT_MIN_RSS_ITEMS = 20
+BLOCKED_COOLDOWN_SECONDS = 8
 
 RSS_CONFIG = RssConfig(
     url=f"{BASE_URL}/rss/Article.xml",
@@ -106,6 +107,14 @@ def _expected_rss_min_count(max_items=None):
     if max_items:
         return min(minimum, max_items)
     return minimum
+
+
+def _page_status(page):
+    status = getattr(page, "status", None) or getattr(page, "status_code", None)
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
 
 
 def _enrich_http_rss_articles(articles, max_items=None):
@@ -296,12 +305,19 @@ def _collect_browser_rss_articles(days=1, max_items=100, seen_links=None, stealt
 
 
 def _collect_http_rss_articles(days=1, max_items=100, seen_links=None):
-    page = fetch_page(RSS_CONFIG.url, timeout=RSS_CONFIG.timeout, site_name="BUSINESSPOST")
+    page = fetch_page(
+        RSS_CONFIG.url,
+        timeout=RSS_CONFIG.timeout,
+        site_name="BUSINESSPOST",
+        max_retries=2,
+        backoff_seconds=2,
+    )
     if not page:
-        return []
+        return [], None
+    status = _page_status(page)
     articles = _parse_rss_text(response_text(page), days=days, max_items=max_items, seen_links=seen_links)
-    print(f"[BUSINESSPOST] RSS 최근 {days}일 대상: {len(articles)}개")
-    return articles
+    print(f"[BUSINESSPOST] RSS 응답: {status}, 최근 {days}일 대상: {len(articles)}개")
+    return articles, status
 
 
 def _collect_browser_list_articles(days=1, max_items=100, seen_links=None, stealth=False):
@@ -381,6 +397,9 @@ def _selenium_driver():
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--lang=ko-KR")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument(
         "--user-agent="
@@ -392,6 +411,7 @@ def _selenium_driver():
     )
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option("useAutomationExtension", False)
+    chrome_options.page_load_strategy = "eager"
 
     chrome_path = os.getenv("BUSINESSPOST_CHROME_PATH") or ""
     if chrome_path:
@@ -421,6 +441,11 @@ def _selenium_driver():
         driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     except Exception:
         pass
+    try:
+        driver.set_page_load_timeout(15)
+        driver.set_script_timeout(15)
+    except Exception:
+        pass
     return driver
 
 
@@ -442,16 +467,32 @@ def _collect_selenium_articles(days=1, max_items=100, seen_links=None):
     try:
         for page_no in range(1, BROWSER_MAX_PAGES + 1):
             list_url = f"{BASE_URL}/BP?command=sub&sub=8&page={page_no}"
-            try:
-                driver.get(list_url)
-                time.sleep(2)
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-                time.sleep(1)
-                items = driver.find_elements(By.CSS_SELECTOR, "div.left_post")
-                print(f"[BUSINESSPOST] Selenium 목록 page={page_no}: {len(items)}개")
-            except Exception as exc:
-                print(f"[BUSINESSPOST] Selenium 목록 실패 ({list_url}): {exc}")
-                break
+            items = []
+            for attempt in range(1, 3):
+                try:
+                    driver.get(list_url)
+                    time.sleep(2)
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+                    time.sleep(1)
+                    items = driver.find_elements(By.CSS_SELECTOR, "div.left_post")
+                    print(f"[BUSINESSPOST] Selenium 목록 page={page_no} try={attempt}: {len(items)}개")
+                    if items:
+                        break
+                    title = clean_text(driver.title, max_length=120)
+                    source_head = clean_text(driver.page_source[:300], max_length=300)
+                    print(f"[BUSINESSPOST] Selenium 목록 0건 진단: title={title}, source={source_head}")
+                    if attempt < 2:
+                        wait = BLOCKED_COOLDOWN_SECONDS * attempt
+                        print(f"[BUSINESSPOST] Selenium 목록 0건, {wait}s 후 재시도")
+                        time.sleep(wait)
+                except Exception as exc:
+                    print(f"[BUSINESSPOST] Selenium 목록 실패 ({list_url}): {exc}")
+                    if attempt < 2:
+                        wait = BLOCKED_COOLDOWN_SECONDS * attempt
+                        print(f"[BUSINESSPOST] Selenium 목록 실패, {wait}s 후 재시도")
+                        time.sleep(wait)
+                        continue
+                    break
 
             if not items:
                 break
@@ -544,7 +585,7 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
     seen_links = set(seen_links or set())
 
     print("[BUSINESSPOST] RSS 목록 수집 중...")
-    rss_articles = _collect_http_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
+    rss_articles, rss_status = _collect_http_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
     expected_min = _expected_rss_min_count(max_items=max_items)
 
     if len(rss_articles) >= expected_min:
@@ -555,6 +596,18 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
 
     if rss_articles:
         print(f"[BUSINESSPOST] RSS 기대치 미달: {len(rss_articles)}개 < {expected_min}개, fallback 병합 시도")
+
+    if rss_status in {403, 429} and not rss_articles:
+        print(
+            f"[BUSINESSPOST] RSS {rss_status}: 추가 Scrapling 요청을 건너뛰고 "
+            f"{BLOCKED_COOLDOWN_SECONDS}s 후 Selenium fallback 실행"
+        )
+        time.sleep(BLOCKED_COOLDOWN_SECONDS)
+        results = _collect_selenium_articles(days=days, max_items=max_items, seen_links=seen_links)
+        if results:
+            print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+            return results
+        print("[BUSINESSPOST] Selenium fallback 0건: Scrapling 브라우저 fallback 계속 진행")
 
     print("[BUSINESSPOST] RSS 실패/0건/부족: DynamicFetcher fallback 실행")
     dynamic_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
