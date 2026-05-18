@@ -36,7 +36,7 @@ DETAIL_WORKERS = 2
 REQUEST_DELAY_SECONDS = 0.8
 DEFAULT_MIN_RSS_ITEMS = 20
 BLOCKED_COOLDOWN_SECONDS = 8
-MOBILE_MAX_CANDIDATES = 80
+MOBILE_MAX_CANDIDATES = 220
 
 RSS_CONFIG = RssConfig(
     url=f"{BASE_URL}/rss/Article.xml",
@@ -471,6 +471,8 @@ def _collect_mobile_articles(days=1, max_items=100, seen_links=None):
         links = []
 
     max_candidates = int(os.getenv("BUSINESSPOST_MOBILE_MAX_CANDIDATES", str(MOBILE_MAX_CANDIDATES)))
+    if max_items:
+        max_candidates = max(max_candidates, max_items)
     for link_elem in links:
         raw_url = get_attr(link_elem, "href")
         mobile_url = _mobile_article_url(raw_url)
