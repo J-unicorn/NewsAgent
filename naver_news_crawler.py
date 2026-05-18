@@ -32,7 +32,8 @@ from crawler_common import (
 BASE_URL = "https://search.naver.com"
 PROVIDER_DEFAULT = "Naver News"
 REQUEST_DELAY_SECONDS = 1.5
-MAX_RESULTS_PER_QUERY = 5
+MAX_RESULTS_PER_QUERY = 8
+MAX_RESULTS_PER_SORT = 4
 
 REPRO_QUERIES = [
     "풀뎁스 로봇 물고기",
@@ -127,9 +128,9 @@ def _env_int(name, default):
         return default
 
 
-def _search_url(query):
+def _search_url(query, sort="1"):
     encoded = quote(query)
-    return f"{BASE_URL}/search.naver?where=news&sm=tab_jum&sort=1&query={encoded}"
+    return f"{BASE_URL}/search.naver?where=news&sm=tab_jum&sort={sort}&query={encoded}"
 
 
 def _compact(value):
@@ -264,22 +265,44 @@ def _queries():
     return list(REPRO_QUERIES)
 
 
+def _search_sorts():
+    configured = os.getenv("NAVER_NEWS_SEARCH_SORTS", "1,0").strip()
+    sorts = [sort.strip() for sort in re.split(r"[,|]", configured) if sort.strip()]
+    return sorts or ["1"]
+
+
 def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_seen_links=None):
     seen_links = set(global_seen_links or set())
     seen_titles = set()
     records = []
     delay = _env_float("NAVER_NEWS_REQUEST_DELAY", REQUEST_DELAY_SECONDS)
     per_query = _env_int("NAVER_NEWS_MAX_RESULTS_PER_QUERY", MAX_RESULTS_PER_QUERY)
+    per_sort = _env_int("NAVER_NEWS_MAX_RESULTS_PER_SORT", MAX_RESULTS_PER_SORT)
+    search_sorts = _search_sorts()
 
     for query in _queries():
         if max_items is not None and len(records) >= max_items:
             break
-        page = fetch_page(_search_url(query), timeout=15, site_name=f"NAVER_NEWS/{query}", max_retries=2)
-        if not page:
-            time.sleep(delay)
-            continue
 
-        candidates = _extract_search_records(page, query)[:per_query]
+        candidates = []
+        seen_candidate_urls = set()
+        for sort in search_sorts:
+            page = fetch_page(_search_url(query, sort=sort), timeout=15, site_name=f"NAVER_NEWS/{query}/sort={sort}", max_retries=2)
+            if not page:
+                time.sleep(delay)
+                continue
+            for candidate in _extract_search_records(page, query)[:per_sort]:
+                url = candidate.get("provider_link_page") or candidate.get("url")
+                if not url or url in seen_candidate_urls:
+                    continue
+                seen_candidate_urls.add(url)
+                candidates.append(candidate)
+                if len(candidates) >= per_query:
+                    break
+            time.sleep(delay)
+            if len(candidates) >= per_query:
+                break
+
         print(f"[NAVER_NEWS/{query}] 검색 후보: {len(candidates)}개")
         for candidate in candidates:
             if max_items is not None and len(records) >= max_items:
