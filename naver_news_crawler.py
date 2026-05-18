@@ -27,6 +27,13 @@ from crawler_common import (
     parse_date_any,
     response_text,
 )
+from news_keyword_sets import (
+    GOOGLE_NEWS_QUERY_TARGETS,
+    NAVER_NEWS_GOOGLE_TARGET_ALIASES,
+    NAVER_NEWS_HS_REPRO_QUERIES,
+    NAVER_NEWS_HS_SUPPLEMENTAL_QUERIES_2026_05_12,
+    unique_keywords,
+)
 
 
 BASE_URL = "https://search.naver.com"
@@ -35,33 +42,12 @@ REQUEST_DELAY_SECONDS = 1.5
 MAX_RESULTS_PER_QUERY = 8
 MAX_RESULTS_PER_SORT = 4
 
-REPRO_QUERIES = [
-    "풀뎁스 로봇 물고기",
-    "중국 로봇 청년 취업",
-    "코웨이 말레이시아 신규상품 매출",
-    "보람그룹 삼성 가전 할인",
-    "삼성 LG 전장사업",
-    "쿠팡 녹색제품 기획전",
-    "한국개발연구원 유가 물가",
-    "고용보험 가입자 27만",
-    "해상 초크포인트 대응",
-    "브렌트유 아시아 증시",
-    "환율 상승 물가압력",
-    "파월 긴축 구제",
-    "트럼프미디어 1분기 손실",
-    "LG전자 중국 생태계 활용",
-    "LG전자 냉난방공조 2030 매출 20조",
-    "국내 로봇 해외산",
-    "군용 로봇 시장 성장",
-    "현대차 비전투 로봇",
-    "스마트테크 코리아 로봇",
-    "소방청 AI 로봇 위원회",
-    "미국 이란 종전협상",
-    "이란 해상봉쇄 원유",
-    "네타냐후 이란 우라늄",
-    "모디 기름 소비 절감",
-    "삼성전자 노사 성과급 사후조정",
-]
+REPRO_QUERIES = unique_keywords(
+    GOOGLE_NEWS_QUERY_TARGETS,
+    NAVER_NEWS_GOOGLE_TARGET_ALIASES,
+    NAVER_NEWS_HS_REPRO_QUERIES,
+    NAVER_NEWS_HS_SUPPLEMENTAL_QUERIES_2026_05_12,
+)
 
 DETAIL_CONFIG = DetailConfig(
     content_selectors=[

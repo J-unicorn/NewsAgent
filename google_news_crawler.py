@@ -16,28 +16,10 @@ from crawler_common import (
     strip_html_text,
     translate_records,
 )
+from news_keyword_sets import GOOGLE_NEWS_TARGET_GROUPS
 
 
-TARGET_GROUPS = [
-    {
-        "name": "China Competitors",
-        "targets": ["海尔", "美的", "海信集團"],
-        "locale": "hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans",
-        "extra_query": "-ETF -专利",
-    },
-    {
-        "name": "Global Competitors",
-        "targets": ["Electrolux", "GE Appliance", "Whirlpool", "Bosch Appliance"],
-        "locale": "hl=en-US&gl=US&ceid=US%3Aen",
-        "extra_query": "",
-    },
-    {
-        "name": "Logistics Keywords",
-        "targets": ["수에즈 운하", "파나마 운하", "홍해", "SCFI"],
-        "locale": "hl=ko&gl=KR&ceid=KR%3Ako",
-        "extra_query": "",
-    },
-]
+TARGET_GROUPS = GOOGLE_NEWS_TARGET_GROUPS
 
 
 def _rss_url(target, days, locale, extra_query=""):
