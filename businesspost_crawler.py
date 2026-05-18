@@ -130,6 +130,18 @@ def _expected_rss_min_count(max_items=None):
     return minimum
 
 
+def _mobile_max_items(max_items=None):
+    configured = os.getenv("BUSINESSPOST_MOBILE_MAX_ITEMS")
+    if configured:
+        try:
+            return int(configured)
+        except ValueError:
+            pass
+    if max_items and max_items >= 100:
+        return 150
+    return max_items
+
+
 def _page_status(page):
     status = getattr(page, "status", None) or getattr(page, "status_code", None)
     try:
@@ -417,7 +429,13 @@ def _mobile_detail(url, title=""):
         return None
 
     wrapper = first_element(page, "article.detailwrapper")
-    title_text = get_all_text(first_element(wrapper, "section.postTitle div.title"), max_length=0) or title
+    title_text = (
+        get_all_text(first_element(wrapper, "section.postTitle div.title"), max_length=0)
+        or get_attr(first_element(page, 'meta[property="og:title"]'), "content")
+        or get_all_text(first_element(page, "title"), max_length=0)
+        or title
+    )
+    title_text = re.sub(r"\s*[-|]\s*비즈니스포스트\s*$", "", title_text).strip()
     date_text = get_all_text(first_element(wrapper, "section.postTitle div.date"), max_length=100)
     writer_text = get_all_text(first_element(wrapper, "section.postTitle div.writer"), max_length=200)
     article_date = parse_date_any(date_text)
@@ -491,7 +509,6 @@ def _collect_mobile_articles(days=1, max_items=100, seen_links=None):
 
     print(f"[BUSINESSPOST] 모바일 목록 후보: {len(candidates)}개")
     results = []
-    old_after_dated = 0
     for index, (title, mobile_url, canonical_url) in enumerate(candidates, 1):
         article = _mobile_detail(mobile_url, title=title)
         time.sleep(REQUEST_DELAY_SECONDS)
@@ -501,11 +518,7 @@ def _collect_mobile_articles(days=1, max_items=100, seen_links=None):
         if not article_date:
             continue
         if not _is_recent_businesspost(article_date, days):
-            old_after_dated += 1
-            if old_after_dated >= 10:
-                break
             continue
-        old_after_dated = 0
         article["provider_link_page"] = canonical_url
         article["url"] = canonical_url
         results.append(article)
@@ -736,7 +749,7 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
             f"{BLOCKED_COOLDOWN_SECONDS}s 후 모바일 fallback 실행"
         )
         time.sleep(BLOCKED_COOLDOWN_SECONDS)
-        results = _collect_mobile_articles(days=days, max_items=max_items, seen_links=seen_links)
+        results = _collect_mobile_articles(days=days, max_items=_mobile_max_items(max_items), seen_links=seen_links)
         if results:
             print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
             return results
@@ -780,7 +793,7 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
         return results
 
     print("[BUSINESSPOST] Scrapling 브라우저 실패/0건: 모바일 fallback 실행")
-    results = _collect_mobile_articles(days=days, max_items=max_items, seen_links=seen_links)
+    results = _collect_mobile_articles(days=days, max_items=_mobile_max_items(max_items), seen_links=seen_links)
     if results:
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
