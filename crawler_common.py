@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
 import re
+import time
 from typing import Callable, Iterable
 from urllib.parse import urljoin
 from xml.etree import ElementTree as ET
@@ -170,13 +171,34 @@ def normalize_url(raw_link, base_url):
     return urljoin(base_url.rstrip("/") + "/", raw_link)
 
 
-def fetch_page(url, timeout=10, site_name=""):
+def _response_status(page):
+    status = getattr(page, "status", None) or getattr(page, "status_code", None)
     try:
-        return Fetcher.get(url, stealthy_headers=True, timeout=timeout)
-    except Exception as e:
-        prefix = f"[{site_name}] " if site_name else ""
-        print(f"{prefix}fetch 실패 ({url[:80]}): {e}")
+        return int(status)
+    except (TypeError, ValueError):
         return None
+
+
+def fetch_page(url, timeout=10, site_name="", max_retries=3, backoff_seconds=2):
+    prefix = f"[{site_name}] " if site_name else ""
+    for attempt in range(1, max(max_retries, 1) + 1):
+        try:
+            page = Fetcher.get(url, stealthy_headers=True, timeout=timeout)
+            status = _response_status(page)
+            if status in {403, 429} and attempt < max_retries:
+                wait = backoff_seconds * attempt
+                print(f"{prefix}fetch {status}, {wait}s 후 재시도 ({attempt}/{max_retries}): {url[:80]}")
+                time.sleep(wait)
+                continue
+            return page
+        except Exception as e:
+            if attempt < max_retries:
+                wait = backoff_seconds * attempt
+                print(f"{prefix}fetch 실패, {wait}s 후 재시도 ({attempt}/{max_retries}) ({url[:80]}): {e}")
+                time.sleep(wait)
+                continue
+            print(f"{prefix}fetch 실패 ({url[:80]}): {e}")
+            return None
 
 
 def response_text(page):
@@ -475,13 +497,46 @@ def finalize_article(article):
     return article
 
 
-def enrich_articles(articles, detail_config=None, max_workers=10, site_name=""):
+def enrich_articles(articles, detail_config=None, max_workers=10, site_name="", request_delay=0):
     if not articles:
         return []
     if not detail_config:
         return [finalize_article(article) for article in articles]
 
+    max_workers = max(int(max_workers or 1), 1)
+    request_delay = float(request_delay or 0)
     results = []
+
+    def _merge_batch(batch):
+        batch_results = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_article = {
+                executor.submit(fetch_detail, article, detail_config, site_name): article
+                for article in batch
+            }
+            for future in as_completed(future_to_article):
+                article = future_to_article[future]
+                try:
+                    detail = future.result()
+                except Exception as e:
+                    print(f"[{site_name}] 상세 실패 ({article.get('url', '')[:80]}): {e}")
+                    detail = {}
+                merged = dict(article)
+                for key, value in detail.items():
+                    if value:
+                        merged[key] = value
+                batch_results.append(finalize_article(merged))
+        return batch_results
+
+    if request_delay > 0:
+        for start in range(0, len(articles), max_workers):
+            results.extend(_merge_batch(articles[start : start + max_workers]))
+            if site_name and len(results) % 25 == 0:
+                print(f"[{site_name}] 진행: {len(results)}/{len(articles)}")
+            if start + max_workers < len(articles):
+                time.sleep(request_delay)
+        return results
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_article = {
             executor.submit(fetch_detail, article, detail_config, site_name): article
@@ -513,6 +568,7 @@ def collect_site_articles(
     max_items=100,
     seen_links=None,
     detail_workers=10,
+    detail_request_delay=0,
 ):
     seen_links = seen_links or set()
     articles = []
@@ -528,7 +584,13 @@ def collect_site_articles(
         print(f"[{site_name}] selector 대상: {len(articles)}개")
 
     print(f"[{site_name}] 본문 수집 대상: {len(articles)}개")
-    results = enrich_articles(articles, detail_config=detail_config, max_workers=detail_workers, site_name=site_name)
+    results = enrich_articles(
+        articles,
+        detail_config=detail_config,
+        max_workers=detail_workers,
+        site_name=site_name,
+        request_delay=detail_request_delay,
+    )
     print(f"[{site_name}] 완료: {len(results)}개 수집")
     return results
 

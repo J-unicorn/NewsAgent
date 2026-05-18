@@ -1,6 +1,7 @@
 """ZDWang crawler: Scrapling fetch + GBK-safe parsing + parallel translation."""
 
 import re
+import time
 from datetime import datetime
 
 from crawler_common import (
@@ -20,10 +21,13 @@ CATEGORIES = [
     {"url": "http://news.zdwang.com/web/", "main": "뉴스센터", "sub": "과기쾌보"},
     {"url": "http://news.zdwang.com/hea/", "main": "뉴스센터", "sub": "지혜가전"},
 ]
+REQUEST_DELAY_SECONDS = 0.5
 
 
 def _fetch_html(url):
-    return response_text(fetch_page(url, timeout=15, site_name="ZDWANG"))
+    html = response_text(fetch_page(url, timeout=15, site_name="ZDWANG"))
+    time.sleep(REQUEST_DELAY_SECONDS)
+    return html
 
 
 def _parse_list_items(html, base_url):

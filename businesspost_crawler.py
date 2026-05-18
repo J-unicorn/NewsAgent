@@ -31,6 +31,9 @@ from crawler_common import (
 BASE_URL = "https://www.businesspost.co.kr"
 PROVIDER = "비즈니스포스트"
 BROWSER_MAX_PAGES = 5
+DETAIL_WORKERS = 2
+REQUEST_DELAY_SECONDS = 0.8
+DEFAULT_MIN_RSS_ITEMS = 20
 
 RSS_CONFIG = RssConfig(
     url=f"{BASE_URL}/rss/Article.xml",
@@ -75,6 +78,45 @@ def _article_base(title, url, date_obj=None, category_main="", category_sub="", 
         "useful": 1,
         "strategy_agenda": 1,
     }
+
+
+def _article_key(article):
+    return normalize_url(article.get("provider_link_page") or article.get("url"), BASE_URL)
+
+
+def _merge_records(primary, fallback, max_items=None):
+    merged = []
+    seen = set()
+    for article in list(primary or []) + list(fallback or []):
+        key = _article_key(article)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(article)
+        if max_items and len(merged) >= max_items:
+            break
+    return merged
+
+
+def _expected_rss_min_count(max_items=None):
+    try:
+        minimum = int(os.getenv("BUSINESSPOST_MIN_RSS_ITEMS", str(DEFAULT_MIN_RSS_ITEMS)))
+    except ValueError:
+        minimum = DEFAULT_MIN_RSS_ITEMS
+    if max_items:
+        return min(minimum, max_items)
+    return minimum
+
+
+def _enrich_http_rss_articles(articles, max_items=None):
+    records = enrich_articles(
+        articles,
+        detail_config=DETAIL_CONFIG,
+        max_workers=DETAIL_WORKERS,
+        site_name="BUSINESSPOST",
+        request_delay=REQUEST_DELAY_SECONDS,
+    )
+    return records[:max_items] if max_items else records
 
 
 def _is_recent_businesspost(article_date, days):
@@ -230,6 +272,7 @@ def _browser_enrich_articles(articles, max_items=None, stealth=False):
                 print(f"[BUSINESSPOST] 브라우저 상세 진행: {index}/{len(articles)}")
             if max_items and len(results) >= max_items:
                 break
+            time.sleep(REQUEST_DELAY_SECONDS)
     return results
 
 
@@ -302,6 +345,7 @@ def _collect_browser_list_articles(days=1, max_items=100, seen_links=None, steal
                 page_new_urls += 1
                 base_article = _article_base(title=title, url=url)
                 detail = _browser_detail(session, url)
+                time.sleep(REQUEST_DELAY_SECONDS)
                 article_date = detail.get("_article_date")
                 if not article_date:
                     continue
@@ -501,24 +545,36 @@ def get_businesspost_data(driver=None, days=1, max_items=100, seen_links=None):
 
     print("[BUSINESSPOST] RSS 목록 수집 중...")
     rss_articles = _collect_http_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
+    expected_min = _expected_rss_min_count(max_items=max_items)
 
-    if rss_articles:
+    if len(rss_articles) >= expected_min:
         print(f"[BUSINESSPOST] HTTP RSS 성공: {len(rss_articles)}개")
-        results = enrich_articles(rss_articles, detail_config=DETAIL_CONFIG, max_workers=5, site_name="BUSINESSPOST")
+        results = _enrich_http_rss_articles(rss_articles, max_items=max_items)
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
 
-    print("[BUSINESSPOST] RSS 실패/0건: DynamicFetcher fallback 실행")
+    if rss_articles:
+        print(f"[BUSINESSPOST] RSS 기대치 미달: {len(rss_articles)}개 < {expected_min}개, fallback 병합 시도")
+
+    print("[BUSINESSPOST] RSS 실패/0건/부족: DynamicFetcher fallback 실행")
     dynamic_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links)
     if dynamic_rss_articles:
-        results = _browser_enrich_articles(dynamic_rss_articles, max_items=max_items)
+        candidates = _merge_records(rss_articles, dynamic_rss_articles, max_items=max_items)
+        results = _browser_enrich_articles(candidates, max_items=max_items)
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
 
     print("[BUSINESSPOST] Dynamic RSS 실패/0건: StealthyFetcher fallback 실행")
     stealth_rss_articles = _collect_browser_rss_articles(days=days, max_items=max_items, seen_links=seen_links, stealth=True)
     if stealth_rss_articles:
-        results = _browser_enrich_articles(stealth_rss_articles, max_items=max_items, stealth=True)
+        candidates = _merge_records(rss_articles, stealth_rss_articles, max_items=max_items)
+        results = _browser_enrich_articles(candidates, max_items=max_items, stealth=True)
+        print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
+        return results
+
+    if rss_articles:
+        print("[BUSINESSPOST] fallback 결과 없음: HTTP RSS 결과만 사용")
+        results = _enrich_http_rss_articles(rss_articles, max_items=max_items)
         print(f"[BUSINESSPOST] 완료: {len(results)}개 수집")
         return results
 

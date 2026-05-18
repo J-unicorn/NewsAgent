@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 from datetime import datetime
 
 from crawler_common import (
@@ -21,6 +22,8 @@ from crawler_common import (
 
 LIST_BASE_URL = "https://m.cheaa.com"
 ARTICLE_BASE_URL = "https://news.cheaa.com"
+REQUEST_DELAY_SECONDS = 0.5
+DETAIL_WORKERS = 3
 
 DETAIL_CONFIG = DetailConfig(
     content_selectors=["div#ctrlfscont", "div.article", ".article", "article"],
@@ -107,9 +110,16 @@ def get_cheaa_data(driver=None, days_to_scrape=1, max_items=None, global_seen_li
 
         if dated_count and old_count == dated_count:
             break
+        time.sleep(REQUEST_DELAY_SECONDS)
 
     print(f"[CHEAA] 본문 수집 대상: {len(articles)}개")
-    records = enrich_articles(articles, detail_config=DETAIL_CONFIG, max_workers=10, site_name="CHEAA")
+    records = enrich_articles(
+        articles,
+        detail_config=DETAIL_CONFIG,
+        max_workers=DETAIL_WORKERS,
+        site_name="CHEAA",
+        request_delay=REQUEST_DELAY_SECONDS,
+    )
     apply_record_defaults(
         records,
         useful=1,
