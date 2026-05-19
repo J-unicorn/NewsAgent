@@ -8,6 +8,23 @@ on:
       - '**.md'
       - 'docs/**'
   workflow_dispatch:
+    inputs:
+      site:
+        description: 'Optional single site to run (for example NAVER_NEWS)'
+        required: false
+        default: ''
+      date_threshold:
+        description: 'Recent-day threshold passed to crawlers'
+        required: false
+        default: '1'
+      naver_days_ago_from:
+        description: 'Optional Naver date window start offset, for example 4'
+        required: false
+        default: ''
+      naver_days_ago_to:
+        description: 'Optional Naver date window end offset, for example 1'
+        required: false
+        default: ''
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -157,12 +174,19 @@ jobs:
         run: mkdir -p output
       
       - name: Run crawler for ${{ matrix.site }}
+        if: github.event_name != 'workflow_dispatch' || inputs.site == '' || inputs.site == matrix.site
         run: |
           source .venv/bin/activate
           echo "=== ${{ matrix.site }} 크롤링 시작 ==="
           time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
         env:
           SITE: ${{ matrix.site }}
+          DATE_THRESHOLD: ${{ inputs.date_threshold || '1' }}
+          NAVER_OPENAPI_CLIENT_ID: ${{ secrets.NAVER_OPENAPI_CLIENT_ID }}
+          NAVER_OPENAPI_CLIENT_SECRET: ${{ secrets.NAVER_OPENAPI_CLIENT_SECRET }}
+          NAVER_NEWS_WORKERS: 6
+          NAVER_NEWS_DAYS_AGO_FROM: ${{ inputs.naver_days_ago_from }}
+          NAVER_NEWS_DAYS_AGO_TO: ${{ inputs.naver_days_ago_to }}
         continue-on-error: true
       
       - name: Show last logs

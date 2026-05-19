@@ -39,8 +39,8 @@ import naver_news_crawler
 # ============================================================
 # 설정
 # ============================================================
-DATE_THRESHOLD = 1
-MAX_ITEMS_PER_CRAWLER = 100
+DATE_THRESHOLD = int(os.getenv('DATE_THRESHOLD', '1'))
+MAX_ITEMS_PER_CRAWLER = int(os.getenv('MAX_ITEMS_PER_CRAWLER', '100'))
 
 COLUMNS = [
     'title', 'content', 'enveloped_at', 'date', 'provider',
