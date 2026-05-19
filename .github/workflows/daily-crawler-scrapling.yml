@@ -190,6 +190,7 @@ jobs:
         env:
           SITE: ${{ matrix.site }}
           DATE_THRESHOLD: ${{ inputs.date_threshold || '1' }}
+          MAX_ITEMS_PER_CRAWLER: ${{ matrix.site == 'NAVER_NEWS' && '1000' || '100' }}
           COLLECT_DATE_START: ${{ inputs.collect_date_start }}
           COLLECT_DATE_END: ${{ inputs.collect_date_end }}
           NAVER_OPENAPI_CLIENT_ID: ${{ secrets.NAVER_OPENAPI_CLIENT_ID }}
