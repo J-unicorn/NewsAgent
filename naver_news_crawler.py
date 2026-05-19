@@ -474,7 +474,7 @@ def _parse_openapi_query(query, days, seen_links, seen_titles, seen_lock, displa
             url = _normalize_naver_article_url(record.get("provider_link_page") or record.get("url"))
             if not url:
                 continue
-            article_date = record.get("_article_date")
+            article_date = record.get("_article_date") or parse_date_any(record.get("date"))
             if not _article_in_scope(article_date, days):
                 continue
 

@@ -17,6 +17,14 @@ on:
         description: 'Recent-day threshold passed to crawlers'
         required: false
         default: '1'
+      collect_date_start:
+        description: 'Optional inclusive publication date start (YYYY-MM-DD)'
+        required: false
+        default: ''
+      collect_date_end:
+        description: 'Optional inclusive publication date end (YYYY-MM-DD)'
+        required: false
+        default: ''
       naver_days_ago_from:
         description: 'Optional Naver date window start offset, for example 4'
         required: false
@@ -182,9 +190,13 @@ jobs:
         env:
           SITE: ${{ matrix.site }}
           DATE_THRESHOLD: ${{ inputs.date_threshold || '1' }}
+          COLLECT_DATE_START: ${{ inputs.collect_date_start }}
+          COLLECT_DATE_END: ${{ inputs.collect_date_end }}
           NAVER_OPENAPI_CLIENT_ID: ${{ secrets.NAVER_OPENAPI_CLIENT_ID }}
           NAVER_OPENAPI_CLIENT_SECRET: ${{ secrets.NAVER_OPENAPI_CLIENT_SECRET }}
           NAVER_NEWS_WORKERS: 6
+          NAVER_NEWS_DATE_START: ${{ inputs.collect_date_start }}
+          NAVER_NEWS_DATE_END: ${{ inputs.collect_date_end }}
           NAVER_NEWS_DAYS_AGO_FROM: ${{ inputs.naver_days_ago_from }}
           NAVER_NEWS_DAYS_AGO_TO: ${{ inputs.naver_days_ago_to }}
         continue-on-error: true

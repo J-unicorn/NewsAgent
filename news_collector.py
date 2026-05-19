@@ -12,7 +12,7 @@ Selenium 의존성 제거, GitHub Actions matrix 병렬 실행 지원
 import pandas as pd
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # utf-8
 sys.stdout.reconfigure(encoding='utf-8')
@@ -35,12 +35,43 @@ import impacton_crawler
 import greenpost_crawler
 import prnewswire_crawler
 import naver_news_crawler
+from crawler_common import parse_date_any
 
 # ============================================================
 # 설정
 # ============================================================
 DATE_THRESHOLD = int(os.getenv('DATE_THRESHOLD', '1'))
 MAX_ITEMS_PER_CRAWLER = int(os.getenv('MAX_ITEMS_PER_CRAWLER', '100'))
+
+
+def _collect_date_window():
+    start = os.getenv('COLLECT_DATE_START', '').strip()
+    end = os.getenv('COLLECT_DATE_END', '').strip()
+    if start and end:
+        try:
+            start_date = datetime.strptime(start, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end, '%Y-%m-%d').date()
+            return start_date, end_date
+        except ValueError:
+            print(f"⚠️ 날짜 범위 무시: COLLECT_DATE_START={start}, COLLECT_DATE_END={end}")
+            return None
+
+    days_from = os.getenv('COLLECT_DAYS_AGO_FROM', '').strip()
+    days_to = os.getenv('COLLECT_DAYS_AGO_TO', '').strip()
+    if not days_from or not days_to:
+        return None
+    try:
+        older = max(int(days_from), int(days_to))
+        newer = min(int(days_from), int(days_to))
+    except ValueError:
+        print(f"⚠️ 날짜 범위 무시: COLLECT_DAYS_AGO_FROM={days_from}, COLLECT_DAYS_AGO_TO={days_to}")
+        return None
+
+    today = datetime.now().date()
+    return today - timedelta(days=older), today - timedelta(days=newer)
+
+
+COLLECT_DATE_WINDOW = _collect_date_window()
 
 COLUMNS = [
     'title', 'content', 'enveloped_at', 'date', 'provider',
@@ -56,6 +87,8 @@ TARGET_SITE = os.getenv('SITE', '').upper().strip()
 
 print(f"\n🚀 Scrapling 기반 뉴스 수집 시작 (최근 {DATE_THRESHOLD}일치)")
 print(f"📦 RSS-first + selector fallback 전체 크롤러")
+if COLLECT_DATE_WINDOW:
+    print(f"🗓️ 발행일 출력 범위: {COLLECT_DATE_WINDOW[0]} ~ {COLLECT_DATE_WINDOW[1]}")
 
 if TARGET_SITE:
     print(f"🎯 단일 사이트 모드: {TARGET_SITE}")
@@ -183,6 +216,22 @@ for col in COLUMNS:
         df_result[col] = ""
 
 df_result = df_result[COLUMNS]
+
+# 발행일 기준 최종 필터. 크롤러별 검색/상세 파싱 차이를 CSV 산출 직전에 한 번 더 잠근다.
+if COLLECT_DATE_WINDOW and not df_result.empty:
+    start_date, end_date = COLLECT_DATE_WINDOW
+
+    def in_collect_window(value):
+        parsed = parse_date_any(str(value))
+        if not parsed:
+            return False
+        return start_date <= parsed.date() <= end_date
+
+    before = len(df_result)
+    df_result = df_result[df_result['date'].apply(in_collect_window)].copy()
+    removed = before - len(df_result)
+    if removed > 0:
+        print(f"🗓️ 발행일 범위 밖 기사 {removed}건 제거")
 
 # 중복 제거
 if not df_result.empty:
