@@ -10,7 +10,7 @@ from datetime import datetime
 import os
 import re
 import time
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from crawler_common import (
     DetailConfig,
@@ -41,6 +41,7 @@ PROVIDER_DEFAULT = "Naver News"
 REQUEST_DELAY_SECONDS = 1.5
 MAX_RESULTS_PER_QUERY = 8
 MAX_RESULTS_PER_SORT = 4
+NAVER_TRANSIENT_QUERY_PARAMS = {"sid"}
 
 REPRO_QUERIES = unique_keywords(
     GOOGLE_NEWS_QUERY_TARGETS,
@@ -119,6 +120,32 @@ def _search_url(query, sort="1"):
     return f"{BASE_URL}/search.naver?where=news&sm=tab_jum&sort={sort}&query={encoded}"
 
 
+def _normalize_naver_article_url(url):
+    if not url:
+        return ""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return re.sub(r"#.*$", "", url).rstrip("/")
+    if "news.naver.com" not in parsed.netloc.lower():
+        return url
+
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key.lower() not in NAVER_TRANSIENT_QUERY_PARAMS
+    ]
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            re.sub(r"/+$", "", parsed.path or "/") or "/",
+            urlencode(sorted(query_items), doseq=True),
+            "",
+        )
+    )
+
+
 def _compact(value):
     return re.sub(r"\s+", "", (value or "").lower())
 
@@ -157,7 +184,7 @@ def _extract_search_records(page, query):
             naver_link = first_element(item, 'a[href*="n.news.naver.com"]')
             if not naver_link:
                 naver_link = first_element(item, 'a[href*="news.naver.com/main/read.naver"]')
-            url = normalize_url(get_attr(naver_link, "href"), "https://news.naver.com")
+            url = _normalize_naver_article_url(normalize_url(get_attr(naver_link, "href"), "https://news.naver.com"))
             if not url or "news.naver.com" not in url or url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -182,7 +209,7 @@ def _extract_search_records(page, query):
     html = response_text(page)
     url_matches = re.findall(r'https?://n\.news\.naver\.com/[^"\'<>\s]+', html)
     for raw_url in url_matches:
-        url = raw_url.replace("&amp;", "&")
+        url = _normalize_naver_article_url(raw_url.replace("&amp;", "&"))
         if url in seen_urls:
             continue
         seen_urls.add(url)
@@ -258,7 +285,11 @@ def _search_sorts():
 
 
 def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_seen_links=None):
-    seen_links = set(global_seen_links or set())
+    seen_links = {
+        _normalize_naver_article_url(link)
+        for link in (global_seen_links or set())
+        if link
+    }
     seen_titles = set()
     records = []
     delay = _env_float("NAVER_NEWS_REQUEST_DELAY", REQUEST_DELAY_SECONDS)
@@ -278,7 +309,7 @@ def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_se
                 time.sleep(delay)
                 continue
             for candidate in _extract_search_records(page, query)[:per_sort]:
-                url = candidate.get("provider_link_page") or candidate.get("url")
+                url = _normalize_naver_article_url(candidate.get("provider_link_page") or candidate.get("url"))
                 if not url or url in seen_candidate_urls:
                     continue
                 seen_candidate_urls.add(url)
@@ -293,7 +324,7 @@ def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_se
         for candidate in candidates:
             if max_items is not None and len(records) >= max_items:
                 break
-            url = candidate.get("provider_link_page") or candidate.get("url")
+            url = _normalize_naver_article_url(candidate.get("provider_link_page") or candidate.get("url"))
             if not url or url in seen_links:
                 continue
 
