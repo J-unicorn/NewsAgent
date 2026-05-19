@@ -39,7 +39,7 @@ from news_keyword_sets import (
 BASE_URL = "https://search.naver.com"
 PROVIDER_DEFAULT = "Naver News"
 REQUEST_DELAY_SECONDS = 1.5
-MAX_RESULTS_PER_QUERY = 8
+MAX_RESULTS_PER_QUERY = 24
 MAX_RESULTS_PER_SORT = 4
 NAVER_TRANSIENT_QUERY_PARAMS = {"sid"}
 
@@ -115,9 +115,12 @@ def _env_int(name, default):
         return default
 
 
-def _search_url(query, sort="1"):
+def _search_url(query, sort="1", start=None):
     encoded = quote(query)
-    return f"{BASE_URL}/search.naver?where=news&sm=tab_jum&sort={sort}&query={encoded}"
+    url = f"{BASE_URL}/search.naver?where=news&sm=tab_jum&sort={sort}&query={encoded}"
+    if start:
+        url = f"{url}&start={start}"
+    return url
 
 
 def _normalize_naver_article_url(url):
@@ -284,6 +287,19 @@ def _search_sorts():
     return sorts or ["1"]
 
 
+def _search_starts():
+    configured = os.getenv("NAVER_NEWS_SEARCH_STARTS", "1,11,21").strip()
+    starts = []
+    for start in re.split(r"[,|]", configured):
+        try:
+            value = int(start.strip())
+        except ValueError:
+            continue
+        if value > 0:
+            starts.append(value)
+    return starts or [1]
+
+
 def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_seen_links=None):
     seen_links = {
         _normalize_naver_article_url(link)
@@ -296,6 +312,7 @@ def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_se
     per_query = _env_int("NAVER_NEWS_MAX_RESULTS_PER_QUERY", MAX_RESULTS_PER_QUERY)
     per_sort = _env_int("NAVER_NEWS_MAX_RESULTS_PER_SORT", MAX_RESULTS_PER_SORT)
     search_sorts = _search_sorts()
+    search_starts = _search_starts()
 
     for query in _queries():
         if max_items is not None and len(records) >= max_items:
@@ -303,20 +320,28 @@ def get_naver_news_data(driver=None, days_to_scrape=1, max_items=None, global_se
 
         candidates = []
         seen_candidate_urls = set()
-        for sort in search_sorts:
-            page = fetch_page(_search_url(query, sort=sort), timeout=15, site_name=f"NAVER_NEWS/{query}/sort={sort}", max_retries=2)
-            if not page:
-                time.sleep(delay)
-                continue
-            for candidate in _extract_search_records(page, query)[:per_sort]:
-                url = _normalize_naver_article_url(candidate.get("provider_link_page") or candidate.get("url"))
-                if not url or url in seen_candidate_urls:
+        for start in search_starts:
+            for sort in search_sorts:
+                page = fetch_page(
+                    _search_url(query, sort=sort, start=start),
+                    timeout=15,
+                    site_name=f"NAVER_NEWS/{query}/sort={sort}/start={start}",
+                    max_retries=2,
+                )
+                if not page:
+                    time.sleep(delay)
                     continue
-                seen_candidate_urls.add(url)
-                candidates.append(candidate)
+                for candidate in _extract_search_records(page, query)[:per_sort]:
+                    url = _normalize_naver_article_url(candidate.get("provider_link_page") or candidate.get("url"))
+                    if not url or url in seen_candidate_urls:
+                        continue
+                    seen_candidate_urls.add(url)
+                    candidates.append(candidate)
+                    if len(candidates) >= per_query:
+                        break
+                time.sleep(delay)
                 if len(candidates) >= per_query:
                     break
-            time.sleep(delay)
             if len(candidates) >= per_query:
                 break
 
