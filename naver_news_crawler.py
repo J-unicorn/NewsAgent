@@ -424,26 +424,40 @@ def _openapi_record(query, item):
 
 def _fetch_openapi_items(query, sort, display, client_id, client_secret):
     url = _openapi_url(query, sort=sort, display=display)
-    request = Request(
-        url,
-        headers={
-            "X-Naver-Client-Id": client_id,
-            "X-Naver-Client-Secret": client_secret,
-            "User-Agent": "NewsAgent/1.0",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as e:
-        print(f"[NAVER_NEWS_API/{query}/{sort}] HTTP {e.code}: {e.reason}")
-        return None
-    except (URLError, TimeoutError, json.JSONDecodeError) as e:
-        print(f"[NAVER_NEWS_API/{query}/{sort}] 실패: {e}")
-        return None
+    retries = _bounded_int(os.getenv("NAVER_NEWS_API_MAX_RETRIES"), 3, 1, 5)
+    backoff = _env_float("NAVER_NEWS_API_BACKOFF_SECONDS", 1.0)
+    for attempt in range(1, retries + 1):
+        request = Request(
+            url,
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+                "User-Agent": "NewsAgent/1.0",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            return payload.get("items", [])
+        except HTTPError as e:
+            if e.code in {429, 500, 502, 503, 504} and attempt < retries:
+                wait = backoff * attempt
+                print(f"[NAVER_NEWS_API/{query}/{sort}] HTTP {e.code}, {wait:.1f}s 후 재시도 ({attempt}/{retries})")
+                time.sleep(wait)
+                continue
+            print(f"[NAVER_NEWS_API/{query}/{sort}] HTTP {e.code}: {e.reason}")
+            return None
+        except (URLError, TimeoutError, json.JSONDecodeError) as e:
+            if attempt < retries:
+                wait = backoff * attempt
+                print(f"[NAVER_NEWS_API/{query}/{sort}] 실패, {wait:.1f}s 후 재시도 ({attempt}/{retries}): {e}")
+                time.sleep(wait)
+                continue
+            print(f"[NAVER_NEWS_API/{query}/{sort}] 실패: {e}")
+            return None
 
-    return payload.get("items", [])
+    return None
 
 
 def _parse_openapi_query(query, days, seen_links, seen_titles, seen_lock, display, sorts, client_id, client_secret):
@@ -528,10 +542,12 @@ def _get_naver_news_data_openapi(days_to_scrape, max_items, global_seen_links):
                 continue
             if not ok:
                 failed_queries += 1
-            records.extend(query_records)
-            if max_items is not None and len(records) >= max_items:
-                records = records[:max_items]
-                break
+            if max_items is None:
+                records.extend(query_records)
+            else:
+                remaining = max_items - len(records)
+                if remaining > 0:
+                    records.extend(query_records[:remaining])
 
     print(f"[NAVER_NEWS_API] 완료: {len(records)}개 수집, 실패 쿼리={failed_queries}")
     return records, failed_queries
