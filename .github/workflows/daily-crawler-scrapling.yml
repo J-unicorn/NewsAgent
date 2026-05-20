@@ -8,6 +8,32 @@ on:
       - '**.md'
       - 'docs/**'
   workflow_dispatch:
+    inputs:
+      site:
+        description: 'Optional single site to run (for example NAVER_NEWS)'
+        required: false
+        default: ''
+      date_threshold:
+        description: 'Recent-day threshold passed to crawlers'
+        required: false
+        default: '1'
+      collect_date_start:
+        description: 'Optional inclusive publication date start (YYYY-MM-DD)'
+        required: false
+        default: ''
+      collect_date_end:
+        description: 'Optional inclusive publication date end (YYYY-MM-DD)'
+        required: false
+        default: ''
+      naver_days_ago_from:
+        description: 'Optional Naver date window start offset, for example 4'
+        required: false
+        default: ''
+      naver_days_ago_to:
+        description: 'Optional Naver date window end offset, for example 1'
+        required: false
+        default: ''
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PYTHONUNBUFFERED: 1
@@ -17,10 +43,10 @@ jobs:
   crawl:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
+    
     strategy:
       fail-fast: false
-      max-parallel: 20
+      max-parallel: 2
       matrix:
         site:
           - AITIMES
@@ -33,35 +59,70 @@ jobs:
           - IROBOTNEWS
           - OCEANPRESS
           - SHIPPINGNEWSNET
+          - IMPACTON
+          - GREENPOST
+          - PRNEWSWIRE
+          - NAVER_NEWS
           - GOOGLE_NEWS
-
+    
     steps:
       - name: Checkout test_scrapling
         uses: actions/checkout@v4
         with:
           ref: test_scrapling
-
+      
       # 🚀 uv 설치 (캐시 비활성화 - uv.lock 없어서)
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
           # enable-cache 제거 → uv.lock 없어도 OK
+      
       - name: Set up Python 3.11
         run: uv python install 3.11
-
+      
       # 🚀 uv로 의존성 설치
       - name: Install dependencies with uv
         run: |
           uv venv --python 3.11
           source .venv/bin/activate
-
+          
           uv pip install -r requirements.txt
-
+          
           echo ""
           echo "=== 설치된 패키지 ==="
-          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator"
-
+          uv pip list | grep -iE "scrapling|pandas|lxml|cssselect|deep-translator|playwright|patchright|msgspec|browserforge|selenium|webdriver"
+      
+      - name: Setup Chrome for BusinessPost
+        if: matrix.site == 'BUSINESSPOST'
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
+      
+      - name: Export Chrome path for BusinessPost
+        if: matrix.site == 'BUSINESSPOST'
+        run: |
+          CHROME_PATH="${{ steps.setup-chrome.outputs.chrome-path }}"
+          CHROMEDRIVER_PATH="${{ steps.setup-chrome.outputs.chromedriver-path }}"
+          if [ -z "$CHROME_PATH" ]; then
+            CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)"
+          fi
+          if [ -z "$CHROMEDRIVER_PATH" ]; then
+            CHROMEDRIVER_PATH="$(command -v chromedriver || true)"
+          fi
+          
+          if [ -z "$CHROME_PATH" ] || [ -z "$CHROMEDRIVER_PATH" ]; then
+            echo "Chrome or ChromeDriver binary not found"
+            exit 1
+          fi
+          
+          echo "BUSINESSPOST_CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+          echo "BUSINESSPOST_CHROMEDRIVER_PATH=$CHROMEDRIVER_PATH" >> "$GITHUB_ENV"
+          "$CHROME_PATH" --version
+          "$CHROMEDRIVER_PATH" --version
+      
       # 🆕 Scrapling 0.4+ API 검증
       - name: Verify Scrapling 0.4+ API
         run: |
@@ -71,23 +132,24 @@ jobs:
           import scrapling
           v = scrapling.__version__
           print(f"📌 Scrapling 버전: {v}")
-
+          
           # 버전 체크
           parts = v.split('.')
           major, minor = int(parts[0]), int(parts[1])
           if major == 0 and minor < 4:
               print(f"❌ 0.4+ 필요. 현재: {v}")
               sys.exit(1)
-
+          
           # API 검증
           from scrapling.parser import Selector
+          from scrapling.fetchers import DynamicFetcher, DynamicSession, StealthyFetcher, StealthySession
           dummy = Selector('<html><body><a href="x">test</a></body></html>')
-
+          
           assert hasattr(dummy, 'css'), "css 메서드 없음"
-
+          
           links = dummy.css('a')
           print(f"✅ css() 반환 타입: {type(links).__name__}")
-
+          
           # 0.4+ : Selectors.first 속성
           if hasattr(links, 'first'):
               first = links.first
@@ -95,7 +157,7 @@ jobs:
           else:
               first = links[0] if len(links) > 0 else None
               print(f"✅ [0] 인덱싱: {type(first).__name__}")
-
+          
           if first:
               # 텍스트 추출
               text = first.text if hasattr(first, 'text') else None
@@ -110,22 +172,36 @@ jobs:
               text_handler = first.css('::text')
               if hasattr(text_handler, 'get'):
                   print(f"✅ css('::text').get(): {text_handler.get()}")
-
+          
           print("\n✅ Scrapling 0.4+ API 검증 통과")
+          print(f"✅ DynamicFetcher 준비: {DynamicFetcher.__name__}, {DynamicSession.__name__}")
+          print(f"✅ StealthyFetcher 준비: {StealthyFetcher.__name__}, {StealthySession.__name__}")
           PYEOF
-
+      
       - name: Create output directory
         run: mkdir -p output
-
+      
       - name: Run crawler for ${{ matrix.site }}
+        if: github.event_name != 'workflow_dispatch' || inputs.site == '' || inputs.site == matrix.site
         run: |
           source .venv/bin/activate
           echo "=== ${{ matrix.site }} 크롤링 시작 ==="
           time python -u news_collector.py 2>&1 | tee output/${{ matrix.site }}_run.log
         env:
           SITE: ${{ matrix.site }}
+          DATE_THRESHOLD: ${{ inputs.date_threshold || '1' }}
+          MAX_ITEMS_PER_CRAWLER: ${{ matrix.site == 'NAVER_NEWS' && '1000' || '100' }}
+          COLLECT_DATE_START: ${{ inputs.collect_date_start }}
+          COLLECT_DATE_END: ${{ inputs.collect_date_end }}
+          NAVER_OPENAPI_CLIENT_ID: ${{ secrets.NAVER_OPENAPI_CLIENT_ID }}
+          NAVER_OPENAPI_CLIENT_SECRET: ${{ secrets.NAVER_OPENAPI_CLIENT_SECRET }}
+          NAVER_NEWS_WORKERS: 6
+          NAVER_NEWS_DATE_START: ${{ inputs.collect_date_start }}
+          NAVER_NEWS_DATE_END: ${{ inputs.collect_date_end }}
+          NAVER_NEWS_DAYS_AGO_FROM: ${{ inputs.naver_days_ago_from }}
+          NAVER_NEWS_DAYS_AGO_TO: ${{ inputs.naver_days_ago_to }}
         continue-on-error: true
-
+      
       - name: Show last logs
         if: always()
         run: |
@@ -135,7 +211,7 @@ jobs:
             echo "=== Last 30 lines ==="
             tail -30 output/${{ matrix.site }}_run.log
           fi
-
+      
       - name: Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -150,29 +226,30 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     timeout-minutes: 5
-
+    
     steps:
       - uses: actions/checkout@v4
         with:
           ref: test_scrapling
-
+      
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
           version: "latest"
+      
       - run: uv python install 3.11
-
+      
       - name: Install pandas
         run: |
           uv venv --python 3.11
           source .venv/bin/activate
           uv pip install pandas
-
+      
       - uses: actions/download-artifact@v4
         with:
           path: ./all-results
           pattern: scrapling-*-${{ github.run_id }}
-
+      
       - name: Merge CSVs
         run: |
           source .venv/bin/activate
@@ -182,14 +259,14 @@ jobs:
           import glob
           import re
           from datetime import datetime
-
+          
           all_csvs = glob.glob('all-results/**/*.csv', recursive=True)
           all_csvs = [c for c in all_csvs if not c.endswith('_empty.csv')]
           print(f"Found {len(all_csvs)} CSV files")
-
+          
           if not all_csvs:
               exit(0)
-
+          
           dfs = []
           for csv in sorted(all_csvs):
               try:
@@ -199,12 +276,12 @@ jobs:
                       print(f"  ✓ {csv}: {len(df)} rows")
               except Exception as e:
                   print(f"  ✗ {csv}: {e}")
-
+          
           if not dfs:
               exit(0)
-
+          
           merged = pd.concat(dfs, ignore_index=True)
-
+          
           if 'title' in merged.columns:
               def normalize_title(t):
                   if pd.isna(t): return ""
@@ -214,19 +291,19 @@ jobs:
               merged = merged.drop_duplicates(subset=['_norm'], keep='first')
               merged = merged.drop(columns=['_norm'])
               print(f"중복: {before} → {len(merged)}")
-
+          
           if 'date' in merged.columns:
               merged = merged.sort_values(by=['date'], ascending=False, na_position='last')
-
+          
           today = datetime.now().strftime('%y%m%d_%H%M%S')
           output = f'merged/{today}_competitor.csv'
           merged.to_csv(output, index=False, encoding='utf-8-sig')
           print(f"✅ {output}: {len(merged)} rows")
-
+          
           if 'provider' in merged.columns:
               print(merged['provider'].value_counts())
           PYEOF
-
+      
       - uses: actions/upload-artifact@v4
         with:
           name: scrapling-merged-final-${{ github.run_id }}
